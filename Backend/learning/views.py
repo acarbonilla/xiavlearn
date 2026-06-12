@@ -1,7 +1,8 @@
-from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+
+from agents.services import get_curriculum_recommendation
 
 from .models import (
     LearnerProfile,
@@ -92,11 +93,12 @@ class DashboardView(generics.GenericAPIView):
 
         recent_sessions_qs = StudySession.objects.filter(user=request.user).order_by('-started_at')[:5].select_related('module__level', 'module__skill')
         recent_sessions_data = StudySessionSerializer(recent_sessions_qs, many=True).data
+        recommendation = get_curriculum_recommendation(request.user)
 
         return Response({
             'profile': profile_data,
             'skill_mastery': skill_mastery_data,
-            'recommended_module': None,
+            'recommended_module': recommendation['recommended_module'],
             'latest_study_plan': latest_plan_data,
             'recent_sessions': recent_sessions_data,
         })
