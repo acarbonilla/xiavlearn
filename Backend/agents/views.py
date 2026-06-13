@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from learning.models import Module, StudySession
+from xiavlearn.api import success_response
 
 from .services import (
     create_teacher_session,
@@ -22,7 +23,10 @@ class DiagnosticEvaluateView(APIView):
         answers = request.data.get('answers')
         if not isinstance(answers, list) or not answers:
             return Response(
-                {'detail': 'answers must be a non-empty list.'},
+                {
+                    'success': False,
+                    'error': 'answers must be a non-empty list.',
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if any(
@@ -33,20 +37,27 @@ class DiagnosticEvaluateView(APIView):
         ):
             return Response(
                 {
-                    'detail': (
+                    'success': False,
+                    'error': (
                         'Each answer must include question and answer strings.'
-                    )
+                    ),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        return Response(evaluate_diagnostic(request.user, answers))
+        return success_response(
+            evaluate_diagnostic(request.user, answers),
+            'Diagnostic evaluation completed.',
+        )
 
 
 class CurriculumRecommendationView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        return Response(get_curriculum_recommendation(request.user))
+        return success_response(
+            get_curriculum_recommendation(request.user),
+            'Curriculum recommendation generated.',
+        )
 
 
 class TeacherSessionView(APIView):
@@ -56,13 +67,17 @@ class TeacherSessionView(APIView):
         module_id = request.data.get('module_id')
         if not isinstance(module_id, int):
             return Response(
-                {'detail': 'module_id must be an integer.'},
+                {
+                    'success': False,
+                    'error': 'module_id must be an integer.',
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         module = get_object_or_404(Module, pk=module_id, is_active=True)
-        return Response(
+        return success_response(
             create_teacher_session(request.user, module),
-            status=status.HTTP_201_CREATED,
+            'Teacher session created.',
+            status.HTTP_201_CREATED,
         )
 
 
@@ -74,12 +89,18 @@ class TeacherFeedbackView(APIView):
         answer = request.data.get('answer')
         if not isinstance(session_id, int):
             return Response(
-                {'detail': 'session_id must be an integer.'},
+                {
+                    'success': False,
+                    'error': 'session_id must be an integer.',
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if not isinstance(answer, str) or not answer.strip():
             return Response(
-                {'detail': 'answer must be a non-empty string.'},
+                {
+                    'success': False,
+                    'error': 'answer must be a non-empty string.',
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         session = get_object_or_404(
@@ -88,8 +109,9 @@ class TeacherFeedbackView(APIView):
             user=request.user,
             module__isnull=False,
         )
-        return Response(
-            submit_teacher_feedback(request.user, session, answer)
+        return success_response(
+            submit_teacher_feedback(request.user, session, answer),
+            'Teacher feedback generated and progress updated.',
         )
 
 
@@ -97,9 +119,10 @@ class SchedulerGeneratePlanView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        return Response(
+        return success_response(
             generate_study_plan(request.user),
-            status=status.HTTP_201_CREATED,
+            'Study plan generated.',
+            status.HTTP_201_CREATED,
         )
 
 
@@ -107,4 +130,7 @@ class CoachSummaryView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        return Response(get_coach_summary(request.user))
+        return success_response(
+            get_coach_summary(request.user),
+            'Coach summary generated.',
+        )

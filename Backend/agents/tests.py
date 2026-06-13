@@ -63,6 +63,12 @@ class AgentMVPAPITests(APITestCase):
     def authenticate(self):
         self.client.force_authenticate(self.user)
 
+    def assert_success_response(self, response):
+        self.assertTrue(response.data['success'])
+        self.assertIn('data', response.data)
+        self.assertTrue(response.data['message'])
+        return response.data['data']
+
     def test_all_agent_endpoints_require_authentication(self):
         requests = [
             ('post', '/api/diagnostic/evaluate/', {'answers': []}),
@@ -84,6 +90,8 @@ class AgentMVPAPITests(APITestCase):
                 [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN],
                 path,
             )
+            self.assertFalse(response.data['success'])
+            self.assertTrue(response.data['error'])
 
     def test_diagnostic_updates_profile_and_all_skill_masteries(self):
         self.authenticate()
@@ -102,13 +110,14 @@ class AgentMVPAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['overall_level'], 'A2')
+        data = self.assert_success_response(response)
+        self.assertEqual(data['overall_level'], 'A2')
         self.assertEqual(
-            set(response.data['skill_scores']),
+            set(data['skill_scores']),
             set(self.skills),
         )
         self.assertEqual(
-            response.data['weak_skills'],
+            data['weak_skills'],
             ['Listening', 'Speaking'],
         )
         self.assertEqual(
@@ -120,11 +129,12 @@ class AgentMVPAPITests(APITestCase):
             5,
         )
         recommendation = self.client.get('/api/curriculum/recommendation/')
+        recommendation_data = self.assert_success_response(recommendation)
         self.assertEqual(
-            recommendation.data['recommended_module']['id'],
+            recommendation_data['recommended_module']['id'],
             self.speaking_module.id,
         )
-        self.assertIn('Speaking', recommendation.data['reason'])
+        self.assertIn('Speaking', recommendation_data['reason'])
 
     def test_recommendation_and_dashboard_reuse_same_module(self):
         self.authenticate()
@@ -147,13 +157,14 @@ class AgentMVPAPITests(APITestCase):
 
         self.assertEqual(recommendation.status_code, status.HTTP_200_OK)
         self.assertEqual(dashboard.status_code, status.HTTP_200_OK)
+        recommendation_data = self.assert_success_response(recommendation)
         self.assertEqual(
-            recommendation.data['recommended_module']['id'],
+            recommendation_data['recommended_module']['id'],
             self.grammar_module.id,
         )
         self.assertEqual(
             dashboard.data['recommended_module'],
-            recommendation.data['recommended_module'],
+            recommendation_data['recommended_module'],
         )
 
     def test_teacher_session_and_feedback_persist_progress(self):
@@ -168,26 +179,28 @@ class AgentMVPAPITests(APITestCase):
             session_response.status_code,
             status.HTTP_201_CREATED,
         )
-        self.assertIn('Past Tense', session_response.data['lesson'])
-        self.assertTrue(session_response.data['practice_question'])
+        session_data = self.assert_success_response(session_response)
+        self.assertIn('Past Tense', session_data['lesson'])
+        self.assertTrue(session_data['practice_question'])
 
         feedback_response = self.client.post(
             '/api/teacher/feedback/',
             {
-                'session_id': session_response.data['session_id'],
+                'session_id': session_data['session_id'],
                 'answer': 'Yesterday I go to mall.',
             },
             format='json',
         )
 
         self.assertEqual(feedback_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(feedback_response.data['score'], 62)
+        feedback_data = self.assert_success_response(feedback_response)
+        self.assertEqual(feedback_data['score'], 62)
         self.assertEqual(
-            feedback_response.data['feedback'],
+            feedback_data['feedback'],
             'Good attempt. Review verb tense.',
         )
         session = StudySession.objects.get(
-            pk=session_response.data['session_id']
+            pk=session_data['session_id']
         )
         self.assertEqual(session.input_text, 'Yesterday I go to mall.')
         self.assertEqual(int(session.score), 62)
@@ -216,6 +229,8 @@ class AgentMVPAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(response.data['success'])
+        self.assertEqual(response.data['error'], 'No StudySession matches the given query.')
 
     def test_scheduler_and_coach_return_saved_progress(self):
         self.authenticate()
@@ -243,15 +258,17 @@ class AgentMVPAPITests(APITestCase):
             plan_response.status_code,
             status.HTTP_201_CREATED,
         )
+        plan_data = self.assert_success_response(plan_response)
+        coach_data = self.assert_success_response(coach_response)
         self.assertEqual(
-            plan_response.data['plan']['focus'],
+            plan_data['plan']['focus'],
             ['Grammar', 'Speaking'],
         )
         self.assertEqual(StudyPlan.objects.filter(user=self.user).count(), 1)
         self.assertEqual(coach_response.status_code, status.HTTP_200_OK)
-        self.assertIn('Grammar', coach_response.data['summary'])
+        self.assertIn('Grammar', coach_data['summary'])
         self.assertEqual(
-            coach_response.data['next_step'],
+            coach_data['next_step'],
             'Complete your recommended module.',
         )
 
@@ -285,4 +302,21 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(
             feedback.status_code,
             status.HTTP_400_BAD_REQUEST,
+        )
+        for response in [diagnostic, teacher_session, feedback]:
+            self.assertFalse(response.data['success'])
+            self.assertTrue(response.data['error'])
+
+    def test_agent_response_includes_cors_header_for_frontend_origin(self):
+        self.authenticate()
+
+        response = self.client.get(
+            '/api/coach/summary/',
+            HTTP_ORIGIN='http://localhost:3000',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response['Access-Control-Allow-Origin'],
+            'http://localhost:3000',
         )
