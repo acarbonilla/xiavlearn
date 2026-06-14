@@ -48,8 +48,10 @@ package-lock.json
 *.tmp
 *.temp
 
-# Frontend placeholder
-frontend/node_modules/
-frontend/.next/
-frontend/out/
-frontend/build/
+# Frontend
+Frontend/node_modules/
+Frontend/.next/
+Frontend/out/
+Frontend/build/
+!Frontend/.env.local
+!Frontend/package-lock.json
