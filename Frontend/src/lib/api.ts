@@ -3,7 +3,13 @@ const API_BASE_URL =
 
 export const ADMIN_LOGIN_URL = `${API_BASE_URL}/admin/login/`;
 export const AUTH_NOTE =
-  "Please log in through Django Admin first for MVP testing. Use the same hostname for both apps (for example, 127.0.0.1) so the session cookie is available.";
+  "Please log in to continue.";
+
+export type AuthUser = {
+  id: number;
+  username: string;
+  email: string;
+};
 
 export type ModuleSummary = {
   id: number;
@@ -94,7 +100,7 @@ type ApiEnvelope<T> = {
   message: string;
 };
 
-function getCsrfToken() {
+function readCsrfCookie() {
   if (typeof document === "undefined") {
     return "";
   }
@@ -107,9 +113,25 @@ function getCsrfToken() {
   );
 }
 
+function getErrorMessage(error: unknown): string {
+  if (typeof error === "string") {
+    return error;
+  }
+  if (Array.isArray(error)) {
+    return error.map(getErrorMessage).join(" ");
+  }
+  if (error && typeof error === "object") {
+    return Object.values(error).map(getErrorMessage).join(" ");
+  }
+  return "Request failed.";
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method?.toUpperCase() ?? "GET";
-  const csrfToken = getCsrfToken();
+  if (method !== "GET" && !readCsrfCookie()) {
+    await getCsrfToken();
+  }
+  const csrfToken = readCsrfCookie();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     credentials: "include",
@@ -135,9 +157,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
     const apiError =
       payload && "error" in payload
-        ? typeof payload.error === "string"
-          ? payload.error
-          : JSON.stringify(payload.error)
+        ? getErrorMessage(payload.error)
         : null;
     throw new Error(apiError || `Request failed with status ${response.status}.`);
   }
@@ -147,6 +167,51 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return payload.data;
+}
+
+function notifyAuthChange() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("xiav-auth-change"));
+  }
+}
+
+export async function getCsrfToken() {
+  const data = await request<{ csrf_token: string }>("/api/auth/csrf/");
+  return data.csrf_token;
+}
+
+export async function loginUser(username: string, password: string) {
+  const user = await request<AuthUser>("/api/auth/login/", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+  notifyAuthChange();
+  return user;
+}
+
+export async function registerUser(
+  username: string,
+  email: string,
+  password: string,
+) {
+  const user = await request<AuthUser>("/api/auth/register/", {
+    method: "POST",
+    body: JSON.stringify({ username, email, password }),
+  });
+  notifyAuthChange();
+  return user;
+}
+
+export async function logoutUser() {
+  await request<Record<string, never>>("/api/auth/logout/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  notifyAuthChange();
+}
+
+export function getCurrentUser() {
+  return request<AuthUser>("/api/auth/me/");
 }
 
 export function getDashboard() {

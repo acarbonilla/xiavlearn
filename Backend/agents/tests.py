@@ -158,12 +158,13 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(recommendation.status_code, status.HTTP_200_OK)
         self.assertEqual(dashboard.status_code, status.HTTP_200_OK)
         recommendation_data = self.assert_success_response(recommendation)
+        dashboard_data = self.assert_success_response(dashboard)
         self.assertEqual(
             recommendation_data['recommended_module']['id'],
             self.grammar_module.id,
         )
         self.assertEqual(
-            dashboard.data['recommended_module'],
+            dashboard_data['recommended_module'],
             recommendation_data['recommended_module'],
         )
 

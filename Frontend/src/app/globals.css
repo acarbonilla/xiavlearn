@@ -95,10 +95,9 @@ textarea {
   font-weight: 700;
 }
 
-.text-area {
+.text-area,
+.text-input {
   width: 100%;
-  min-height: 8rem;
-  resize: vertical;
   border: 1px solid var(--border);
   border-radius: 0.8rem;
   background: #fbfdff;
@@ -107,6 +106,12 @@ textarea {
   outline: none;
 }
 
+.text-area {
+  min-height: 8rem;
+  resize: vertical;
+}
+
+.text-input:focus,
 .text-area:focus {
   border-color: var(--brand);
   box-shadow: 0 0 0 3px rgba(51, 92, 255, 0.12);
