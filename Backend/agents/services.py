@@ -14,6 +14,14 @@ from learning.models import (
     StudySession,
 )
 
+from .llm_client import call_llm_json
+from .prompts import (
+    coach_summary_prompt,
+    diagnostic_prompt,
+    teacher_feedback_prompt,
+    teacher_lesson_prompt,
+)
+
 
 SKILL_NAMES = [
     'Grammar',
@@ -22,6 +30,8 @@ SKILL_NAMES = [
     'Listening',
     'Pronunciation',
 ]
+CEFR_LEVELS = {'A1', 'A2', 'B1', 'B2'}
+SKILL_NAME_LOOKUP = {name.lower(): name for name in SKILL_NAMES}
 
 
 def _clamp(value, minimum=0, maximum=100):
@@ -54,6 +64,141 @@ def _serialize_module(module):
         'title': module.title,
         'level': module.level.level_code,
         'skill': module.skill.name,
+    }
+
+
+def _normalize_text(value):
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _normalize_skill_scores(raw_scores):
+    if not isinstance(raw_scores, dict):
+        return None
+
+    normalized_scores = {}
+    for raw_name, raw_score in raw_scores.items():
+        if not isinstance(raw_name, str) or not isinstance(raw_score, (int, float)):
+            continue
+        skill_name = SKILL_NAME_LOOKUP.get(raw_name.strip().lower())
+        if skill_name is None:
+            continue
+        normalized_scores[skill_name] = _clamp(raw_score)
+
+    if set(normalized_scores) != set(SKILL_NAMES):
+        return None
+    return normalized_scores
+
+
+def _normalize_weak_skills(raw_weak_skills, skill_scores):
+    ranked_skills = sorted(skill_scores, key=lambda name: (skill_scores[name], name))
+    if not isinstance(raw_weak_skills, list):
+        return ranked_skills[:2]
+
+    normalized = []
+    seen = set()
+    for raw_skill in raw_weak_skills:
+        if not isinstance(raw_skill, str):
+            continue
+        skill_name = SKILL_NAME_LOOKUP.get(raw_skill.strip().lower())
+        if skill_name and skill_name not in seen:
+            normalized.append(skill_name)
+            seen.add(skill_name)
+        if len(normalized) == 2:
+            return normalized
+
+    for skill_name in ranked_skills:
+        if skill_name not in seen:
+            normalized.append(skill_name)
+        if len(normalized) == 2:
+            return normalized
+    return ranked_skills[:2]
+
+
+def _normalize_feedback_score(raw_score):
+    if not isinstance(raw_score, (int, float)):
+        return None
+    return _clamp(raw_score)
+
+
+def _diagnostic_result_from_llm(answers):
+    llm_payload = call_llm_json(*diagnostic_prompt(answers))
+    if not isinstance(llm_payload, dict):
+        return None
+
+    skill_scores = _normalize_skill_scores(llm_payload.get('skill_scores'))
+    if skill_scores is None:
+        return None
+
+    average_score = sum(skill_scores.values()) / len(skill_scores)
+    overall_level = _normalize_text(llm_payload.get('overall_level'))
+    if overall_level:
+        overall_level = overall_level.upper()
+    if overall_level not in CEFR_LEVELS:
+        overall_level = _level_for_score(average_score)
+
+    weak_skills = _normalize_weak_skills(
+        llm_payload.get('weak_skills'),
+        skill_scores,
+    )
+    recommendation = _normalize_text(llm_payload.get('recommendation'))
+    if recommendation is None:
+        recommendation = f"Focus on {' and '.join(weak_skills)}."
+
+    return {
+        'overall_level': overall_level,
+        'skill_scores': skill_scores,
+        'weak_skills': weak_skills,
+        'recommendation': recommendation,
+    }
+
+
+def _lesson_result_from_llm(module):
+    llm_payload = call_llm_json(*teacher_lesson_prompt(module))
+    if not isinstance(llm_payload, dict):
+        return None
+
+    lesson = _normalize_text(llm_payload.get('lesson'))
+    practice_question = _normalize_text(llm_payload.get('practice_question'))
+    if lesson is None or practice_question is None:
+        return None
+
+    return {
+        'lesson': lesson,
+        'practice_question': practice_question,
+    }
+
+
+def _teacher_feedback_from_llm(module, answer):
+    llm_payload = call_llm_json(*teacher_feedback_prompt(module, answer))
+    if not isinstance(llm_payload, dict):
+        return None
+
+    score = _normalize_feedback_score(llm_payload.get('score'))
+    feedback = _normalize_text(llm_payload.get('feedback'))
+    if score is None or feedback is None:
+        return None
+
+    return score, feedback
+
+
+def _coach_summary_from_llm(profile_level, weakest_skill, recent_session_count):
+    llm_payload = call_llm_json(
+        *coach_summary_prompt(profile_level, weakest_skill, recent_session_count)
+    )
+    if not isinstance(llm_payload, dict):
+        return None
+
+    summary = _normalize_text(llm_payload.get('summary'))
+    next_step = _normalize_text(llm_payload.get('next_step'))
+    if summary is None or next_step is None:
+        return None
+
+    return {
+        'summary': summary,
+        'next_step': next_step,
     }
 
 
@@ -123,34 +268,37 @@ def score_diagnostic_answers(answers):
 
 @transaction.atomic
 def evaluate_diagnostic(user, answers):
-    skill_scores = score_diagnostic_answers(answers)
-    average_score = sum(skill_scores.values()) / len(skill_scores)
-    overall_level = _level_for_score(average_score)
+    diagnostic_result = _diagnostic_result_from_llm(answers)
+    if diagnostic_result is None:
+        skill_scores = score_diagnostic_answers(answers)
+        average_score = sum(skill_scores.values()) / len(skill_scores)
+        overall_level = _level_for_score(average_score)
+        weakest = sorted(skill_scores, key=lambda name: (skill_scores[name], name))[:2]
+        diagnostic_result = {
+            'overall_level': overall_level,
+            'skill_scores': skill_scores,
+            'weak_skills': weakest,
+            'recommendation': f"Focus on {' and '.join(weakest)}.",
+        }
 
     profile, _ = LearnerProfile.objects.get_or_create(user=user)
-    profile.current_level = overall_level
+    profile.current_level = diagnostic_result['overall_level']
     profile.save(update_fields=['current_level', 'updated_at'])
 
     for skill_name in SKILL_NAMES:
         skill, _ = Skill.objects.get_or_create(name=skill_name)
-        score = skill_scores[skill_name]
+        score = diagnostic_result['skill_scores'][skill_name]
         SkillMastery.objects.update_or_create(
             user=user,
             skill=skill,
             defaults={
-                'level_code': overall_level,
+                'level_code': diagnostic_result['overall_level'],
                 'score': Decimal(score),
                 'status': _status_for_score(score),
             },
         )
 
-    weakest = sorted(skill_scores, key=lambda name: (skill_scores[name], name))[:2]
-    return {
-        'overall_level': overall_level,
-        'skill_scores': skill_scores,
-        'weak_skills': weakest,
-        'recommendation': f"Focus on {' and '.join(weakest)}.",
-    }
+    return diagnostic_result
 
 
 def get_curriculum_recommendation(user):
@@ -219,20 +367,25 @@ def create_teacher_session(user, module):
         module=module,
         session_type='lesson',
     )
-    objectives = module.objectives or []
-    objective_text = '; '.join(objectives) if objectives else module.description
-    lesson = (
-        f'{module.title}: {module.description} '
-        f'Learning objectives: {objective_text}.'
-    ).strip()
-    practice_question = (
-        f'Write one English sentence that demonstrates: '
-        f'{objectives[0] if objectives else module.title}.'
-    )
+    lesson_result = _lesson_result_from_llm(module)
+    if lesson_result is None:
+        objectives = module.objectives or []
+        objective_text = '; '.join(objectives) if objectives else module.description
+        lesson_result = {
+            'lesson': (
+                f'{module.title}: {module.description} '
+                f'Learning objectives: {objective_text}.'
+            ).strip(),
+            'practice_question': (
+                'Write one English sentence that demonstrates: '
+                f'{objectives[0] if objectives else module.title}.'
+            ),
+        }
+
     return {
         'session_id': session.id,
-        'lesson': lesson,
-        'practice_question': practice_question,
+        'lesson': lesson_result['lesson'],
+        'practice_question': lesson_result['practice_question'],
     }
 
 
@@ -265,7 +418,12 @@ def generate_teacher_feedback(answer):
 
 @transaction.atomic
 def submit_teacher_feedback(user, session, answer):
-    score, feedback = generate_teacher_feedback(answer)
+    llm_feedback = _teacher_feedback_from_llm(session.module, answer)
+    if llm_feedback is None:
+        score, feedback = generate_teacher_feedback(answer)
+    else:
+        score, feedback = llm_feedback
+
     session.input_text = answer.strip()
     session.ai_feedback = feedback
     session.score = Decimal(score)
@@ -328,6 +486,7 @@ def generate_study_plan(user):
 
 
 def get_coach_summary(user):
+    profile, _ = LearnerProfile.objects.get_or_create(user=user)
     weakest = (
         SkillMastery.objects.filter(user=user)
         .select_related('skill')
@@ -339,6 +498,14 @@ def get_coach_summary(user):
         completed_at__isnull=False,
     ).order_by('-completed_at')[:5]
     completed_count = len(recent_sessions)
+
+    llm_summary = _coach_summary_from_llm(
+        profile.current_level,
+        weakest,
+        completed_count,
+    )
+    if llm_summary is not None:
+        return llm_summary
 
     if weakest:
         if completed_count:
