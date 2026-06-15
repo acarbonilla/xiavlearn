@@ -114,14 +114,8 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = self.assert_success_response(response)
         self.assertEqual(data['overall_level'], 'A2')
-        self.assertEqual(
-            set(data['skill_scores']),
-            set(self.skills),
-        )
-        self.assertEqual(
-            data['weak_skills'],
-            ['Listening', 'Speaking'],
-        )
+        self.assertEqual(set(data['skill_scores']), set(self.skills))
+        self.assertEqual(data['weak_skills'], ['Listening', 'Speaking'])
         self.assertIn('Your level is A2', data['level_explanation'])
         self.assertEqual(len(data['answer_feedback']), 1)
         self.assertEqual(
@@ -129,18 +123,14 @@ class AgentMVPAPITests(APITestCase):
             'Introduce yourself in English.',
         )
         self.assertTrue(data['answer_feedback'][0]['feedback'])
+        self.assertIn('corrected_answer', data['answer_feedback'][0])
+        self.assertIn('mistakes', data['answer_feedback'][0])
         self.assertEqual(
             data['next_step'],
             'Review your weak skills and start the recommended module.',
         )
-        self.assertEqual(
-            LearnerProfile.objects.get(user=self.user).current_level,
-            'A2',
-        )
-        self.assertEqual(
-            SkillMastery.objects.filter(user=self.user).count(),
-            5,
-        )
+        self.assertEqual(LearnerProfile.objects.get(user=self.user).current_level, 'A2')
+        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 5)
         recommendation = self.client.get('/api/curriculum/recommendation/')
         recommendation_data = self.assert_success_response(recommendation)
         self.assertEqual(
@@ -169,6 +159,15 @@ class AgentMVPAPITests(APITestCase):
                     'question': 'Introduce yourself in English.',
                     'answer': 'My name is Ana and I study every night.',
                     'feedback': 'Good response. Add more detail about your routine.',
+                    'corrected_answer': 'Hi, my name is Ana. I study English every night.',
+                    'mistakes': [
+                        {
+                            'type': 'Sentence Structure',
+                            'original': 'I study every night.',
+                            'correction': 'I study English every night.',
+                            'explanation': 'Add the object to make the idea more specific.',
+                        }
+                    ],
                 }
             ],
             'next_step': 'Review your weak skills and start the recommended module.',
@@ -196,13 +195,14 @@ class AgentMVPAPITests(APITestCase):
             'Your level is B1 because you can express connected ideas with some detail.',
         )
         self.assertEqual(
-            data['answer_feedback'][0]['feedback'],
-            'Good response. Add more detail about your routine.',
+            data['answer_feedback'][0]['corrected_answer'],
+            'Hi, my name is Ana. I study English every night.',
         )
         self.assertEqual(
-            LearnerProfile.objects.get(user=self.user).current_level,
-            'B1',
+            data['answer_feedback'][0]['mistakes'][0]['type'],
+            'Sentence Structure',
         )
+        self.assertEqual(LearnerProfile.objects.get(user=self.user).current_level, 'B1')
 
     @patch('agents.services.call_llm_json')
     def test_diagnostic_falls_back_when_llm_payload_is_invalid(self, mock_call_llm_json):
@@ -231,6 +231,50 @@ class AgentMVPAPITests(APITestCase):
         self.assertIn('Your level is', data['level_explanation'])
         self.assertEqual(len(data['answer_feedback']), 1)
         self.assertIn('past tense', data['answer_feedback'][0]['feedback'].lower())
+        self.assertTrue(data['answer_feedback'][0]['mistakes'])
+
+    def test_low_quality_diagnostic_feedback_is_specific_and_beginner_friendly(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/diagnostic/evaluate/',
+            {
+                'answers': [
+                    {
+                        'question': 'Introduce yourself in English.',
+                        'answer': 'Hi Im me and you. Please be me why not.',
+                    },
+                    {
+                        'question': 'Describe what you did yesterday.',
+                        'answer': 'I did almost things look lakkee.',
+                    },
+                    {
+                        'question': 'What is your learning goal?',
+                        'answer': 'me learng was to be enough hose.',
+                    },
+                ]
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['overall_level'], 'A1')
+        self.assertLess(data['skill_scores']['Grammar'], 50)
+        self.assertLess(data['skill_scores']['Speaking'], 50)
+        self.assertIn('clear basic sentences', data['recommendation'])
+        self.assertIn('unclear', data['level_explanation'].lower())
+        self.assertEqual(
+            data['next_step'],
+            'Practice simple complete sentences before moving to longer answers.',
+        )
+        first_feedback = data['answer_feedback'][0]
+        self.assertNotIn('Strong response', first_feedback['feedback'])
+        self.assertIn('unclear', first_feedback['feedback'].lower())
+        self.assertTrue(first_feedback['corrected_answer'])
+        self.assertTrue(first_feedback['mistakes'])
+        self.assertEqual(first_feedback['mistakes'][0]['type'], 'Grammar')
+        self.assertIn('I am', first_feedback['corrected_answer'])
 
     def test_recommendation_and_dashboard_reuse_same_module(self):
         self.authenticate()
@@ -272,10 +316,7 @@ class AgentMVPAPITests(APITestCase):
             format='json',
         )
 
-        self.assertEqual(
-            session_response.status_code,
-            status.HTTP_201_CREATED,
-        )
+        self.assertEqual(session_response.status_code, status.HTTP_201_CREATED)
         session_data = self.assert_success_response(session_response)
         self.assertIn('Past Tense', session_data['lesson'])
         self.assertTrue(session_data['practice_question'])
@@ -296,16 +337,11 @@ class AgentMVPAPITests(APITestCase):
             feedback_data['feedback'],
             'Good attempt. Review verb tense.',
         )
-        session = StudySession.objects.get(
-            pk=session_data['session_id']
-        )
+        session = StudySession.objects.get(pk=session_data['session_id'])
         self.assertEqual(session.input_text, 'Yesterday I go to mall.')
         self.assertEqual(int(session.score), 62)
         self.assertIsNotNone(session.completed_at)
-        mastery = SkillMastery.objects.get(
-            user=self.user,
-            skill=self.skills['Grammar'],
-        )
+        mastery = SkillMastery.objects.get(user=self.user, skill=self.skills['Grammar'])
         self.assertEqual(int(mastery.score), 62)
         self.assertEqual(mastery.status, 'Learning')
 
@@ -344,30 +380,17 @@ class AgentMVPAPITests(APITestCase):
             score=55,
         )
 
-        plan_response = self.client.post(
-            '/api/scheduler/generate-plan/',
-            {},
-            format='json',
-        )
+        plan_response = self.client.post('/api/scheduler/generate-plan/', {}, format='json')
         coach_response = self.client.get('/api/coach/summary/')
 
-        self.assertEqual(
-            plan_response.status_code,
-            status.HTTP_201_CREATED,
-        )
+        self.assertEqual(plan_response.status_code, status.HTTP_201_CREATED)
         plan_data = self.assert_success_response(plan_response)
         coach_data = self.assert_success_response(coach_response)
-        self.assertEqual(
-            plan_data['plan']['focus'],
-            ['Grammar', 'Speaking'],
-        )
+        self.assertEqual(plan_data['plan']['focus'], ['Grammar', 'Speaking'])
         self.assertEqual(StudyPlan.objects.filter(user=self.user).count(), 1)
         self.assertEqual(coach_response.status_code, status.HTTP_200_OK)
         self.assertIn('Grammar', coach_data['summary'])
-        self.assertEqual(
-            coach_data['next_step'],
-            'Complete your recommended module.',
-        )
+        self.assertEqual(coach_data['next_step'], 'Complete your recommended module.')
 
     def test_invalid_agent_payloads_return_400(self):
         self.authenticate()
@@ -388,18 +411,9 @@ class AgentMVPAPITests(APITestCase):
             format='json',
         )
 
-        self.assertEqual(
-            diagnostic.status_code,
-            status.HTTP_400_BAD_REQUEST,
-        )
-        self.assertEqual(
-            teacher_session.status_code,
-            status.HTTP_400_BAD_REQUEST,
-        )
-        self.assertEqual(
-            feedback.status_code,
-            status.HTTP_400_BAD_REQUEST,
-        )
+        self.assertEqual(diagnostic.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(teacher_session.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(feedback.status_code, status.HTTP_400_BAD_REQUEST)
         for response in [diagnostic, teacher_session, feedback]:
             self.assertFalse(response.data['success'])
             self.assertTrue(response.data['error'])
@@ -413,7 +427,4 @@ class AgentMVPAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(
-            response['Access-Control-Allow-Origin'],
-            'http://localhost:3000',
-        )
+        self.assertEqual(response['Access-Control-Allow-Origin'], 'http://localhost:3000')

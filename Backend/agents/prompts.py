@@ -7,9 +7,18 @@ def diagnostic_prompt(answers):
         'and Pronunciation as integer values from 0 to 100. overall_level '
         'must be one of A1, A2, B1, or B2. weak_skills must be the two '
         'weakest skill names. level_explanation must explain why that level '
-        'was assigned. answer_feedback must be an array with one object per '
-        'answer, and each object must include question, answer, and feedback. '
-        'next_step must be one short action-oriented sentence.'
+        'was assigned using CEFR-style judgment. answer_feedback must be an '
+        'array with one object per answer, and each object must include '
+        'question, answer, feedback, corrected_answer, and mistakes. '
+        'Each mistakes item must include type, original, correction, and '
+        'explanation. Valid mistake types are Grammar, Spelling, Vocabulary, '
+        'Clarity, and Sentence Structure. Do not overpraise weak answers. Be '
+        'supportive but honest. Identify grammar, spelling, vocabulary, '
+        'clarity, and sentence structure issues. Give a corrected version of '
+        'each answer. Explain mistakes in simple learner-friendly language. If '
+        'an answer is unclear or nonsensical, say that clearly. Do not call an '
+        'answer strong unless it is clear, accurate, and detailed. Return '
+        'JSON only. No markdown. No prose outside JSON.'
     )
     formatted_answers = '\n\n'.join(
         f"Question: {item.get('question', '').strip()}\n"
@@ -17,9 +26,10 @@ def diagnostic_prompt(answers):
         for item in answers
     )
     user_prompt = (
-        'Evaluate these diagnostic responses for an English learner. '
-        'Be concise, deterministic, supportive, and aligned to CEFR-style '
-        'beginner-to-intermediate feedback. Return JSON only.\n\n'
+        'Evaluate these diagnostic responses for an English learner. Use '
+        'careful, specific, educational feedback for each answer. Low-quality '
+        'or unclear answers should receive low beginner-level scores and '
+        'explicit correction. Return JSON only.\n\n'
         f'{formatted_answers}'
     )
     return system_prompt, user_prompt
