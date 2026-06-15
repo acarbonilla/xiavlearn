@@ -123,83 +123,31 @@ def _normalize_feedback_score(raw_score):
     return _clamp(raw_score)
 
 
-def _diagnostic_result_from_llm(answers):
-    llm_payload = call_llm_json(*diagnostic_prompt(answers))
-    if not isinstance(llm_payload, dict):
+def _normalize_answer_feedback(raw_feedback, answers):
+    if not isinstance(raw_feedback, list) or len(raw_feedback) < len(answers):
         return None
 
-    skill_scores = _normalize_skill_scores(llm_payload.get('skill_scores'))
-    if skill_scores is None:
-        return None
+    normalized_feedback = []
+    for index, source_answer in enumerate(answers):
+        item = raw_feedback[index]
+        if not isinstance(item, dict):
+            return None
 
-    average_score = sum(skill_scores.values()) / len(skill_scores)
-    overall_level = _normalize_text(llm_payload.get('overall_level'))
-    if overall_level:
-        overall_level = overall_level.upper()
-    if overall_level not in CEFR_LEVELS:
-        overall_level = _level_for_score(average_score)
+        feedback = _normalize_text(item.get('feedback'))
+        if feedback is None:
+            return None
 
-    weak_skills = _normalize_weak_skills(
-        llm_payload.get('weak_skills'),
-        skill_scores,
-    )
-    recommendation = _normalize_text(llm_payload.get('recommendation'))
-    if recommendation is None:
-        recommendation = f"Focus on {' and '.join(weak_skills)}."
+        normalized_feedback.append(
+            {
+                'question': _normalize_text(item.get('question'))
+                or source_answer.get('question', '').strip(),
+                'answer': _normalize_text(item.get('answer'))
+                or source_answer.get('answer', '').strip(),
+                'feedback': feedback,
+            }
+        )
 
-    return {
-        'overall_level': overall_level,
-        'skill_scores': skill_scores,
-        'weak_skills': weak_skills,
-        'recommendation': recommendation,
-    }
-
-
-def _lesson_result_from_llm(module):
-    llm_payload = call_llm_json(*teacher_lesson_prompt(module))
-    if not isinstance(llm_payload, dict):
-        return None
-
-    lesson = _normalize_text(llm_payload.get('lesson'))
-    practice_question = _normalize_text(llm_payload.get('practice_question'))
-    if lesson is None or practice_question is None:
-        return None
-
-    return {
-        'lesson': lesson,
-        'practice_question': practice_question,
-    }
-
-
-def _teacher_feedback_from_llm(module, answer):
-    llm_payload = call_llm_json(*teacher_feedback_prompt(module, answer))
-    if not isinstance(llm_payload, dict):
-        return None
-
-    score = _normalize_feedback_score(llm_payload.get('score'))
-    feedback = _normalize_text(llm_payload.get('feedback'))
-    if score is None or feedback is None:
-        return None
-
-    return score, feedback
-
-
-def _coach_summary_from_llm(profile_level, weakest_skill, recent_session_count):
-    llm_payload = call_llm_json(
-        *coach_summary_prompt(profile_level, weakest_skill, recent_session_count)
-    )
-    if not isinstance(llm_payload, dict):
-        return None
-
-    summary = _normalize_text(llm_payload.get('summary'))
-    next_step = _normalize_text(llm_payload.get('next_step'))
-    if summary is None or next_step is None:
-        return None
-
-    return {
-        'summary': summary,
-        'next_step': next_step,
-    }
+    return normalized_feedback
 
 
 def _answer_metrics(answers):
@@ -266,20 +214,185 @@ def score_diagnostic_answers(answers):
     }
 
 
+def _rule_based_answer_feedback(question, answer):
+    answer_text = answer.strip()
+    if not answer_text:
+        return 'Add a complete English sentence so the diagnostic can measure your level.'
+
+    question_lower = question.lower()
+    tense_error = re.search(
+        r'\b(yesterday|last\s+\w+)\b[^.!?]*\b'
+        r'(go|come|eat|see|do|have|make|take)\b',
+        answer_text,
+        flags=re.IGNORECASE,
+    )
+    agreement_error = re.search(
+        r'\b(he|she|it)\s+(go|live|work|study|play|like|want)\b',
+        answer_text,
+        flags=re.IGNORECASE,
+    )
+    word_count = len(re.findall(r"[A-Za-z']+", answer_text))
+
+    if 'yesterday' in question_lower and tense_error:
+        return 'Good attempt. Review past tense verbs when describing what happened yesterday.'
+    if agreement_error:
+        return 'Your idea is understandable. Review subject-verb agreement for better accuracy.'
+    if word_count < 5:
+        if 'introduce yourself' in question_lower:
+            return 'Good basic introduction. Add more personal details to improve fluency.'
+        if 'learning goal' in question_lower:
+            return 'Your goal is clear. Add why you want to learn English to show more range.'
+        return 'Good start. Add one more complete sentence to show more detail.'
+    if word_count < 10:
+        return 'Good answer. Add a little more detail to improve fluency and vocabulary.'
+    return 'Strong response. Keep improving accuracy and detail for even better communication.'
+
+
+def _rule_based_level_explanation(overall_level, metrics):
+    base_explanations = {
+        'A1': 'your answers are short and show early control of basic English.',
+        'A2': 'your answers show basic sentence control, but you need more detail and accuracy.',
+        'B1': 'you can express connected ideas clearly, but some accuracy and vocabulary range still need work.',
+        'B2': 'you can explain ideas with good detail and mostly clear control, with some room to refine accuracy.',
+    }
+
+    if metrics['grammar_errors']:
+        improvement_note = 'Pay attention to grammar accuracy in complete sentences.'
+    elif metrics['word_count'] < 18:
+        improvement_note = 'Try adding more supporting detail to show a wider vocabulary range.'
+    else:
+        improvement_note = 'Keep practicing to make your performance more consistent across skills.'
+
+    return (
+        f'Your level is {overall_level} because '
+        f"{base_explanations[overall_level]} {improvement_note}"
+    )
+
+
+def _build_rule_based_diagnostic_result(answers):
+    metrics = _answer_metrics(answers)
+    skill_scores = score_diagnostic_answers(answers)
+    average_score = sum(skill_scores.values()) / len(skill_scores)
+    overall_level = _level_for_score(average_score)
+    weak_skills = sorted(skill_scores, key=lambda name: (skill_scores[name], name))[:2]
+    recommendation = f"Focus on {' and '.join(weak_skills)}."
+
+    return {
+        'overall_level': overall_level,
+        'skill_scores': skill_scores,
+        'weak_skills': weak_skills,
+        'recommendation': recommendation,
+        'level_explanation': _rule_based_level_explanation(overall_level, metrics),
+        'answer_feedback': [
+            {
+                'question': item.get('question', '').strip(),
+                'answer': item.get('answer', '').strip(),
+                'feedback': _rule_based_answer_feedback(
+                    item.get('question', ''),
+                    item.get('answer', ''),
+                ),
+            }
+            for item in answers
+        ],
+        'next_step': 'Review your weak skills and start the recommended module.',
+    }
+
+
+def _diagnostic_result_from_llm(answers, fallback_result):
+    llm_payload = call_llm_json(*diagnostic_prompt(answers))
+    if not isinstance(llm_payload, dict):
+        return None
+
+    skill_scores = _normalize_skill_scores(llm_payload.get('skill_scores'))
+    if skill_scores is None:
+        return None
+
+    average_score = sum(skill_scores.values()) / len(skill_scores)
+    overall_level = _normalize_text(llm_payload.get('overall_level'))
+    if overall_level:
+        overall_level = overall_level.upper()
+    if overall_level not in CEFR_LEVELS:
+        overall_level = _level_for_score(average_score)
+
+    result = dict(fallback_result)
+    result['skill_scores'] = skill_scores
+    result['overall_level'] = overall_level
+    result['weak_skills'] = _normalize_weak_skills(
+        llm_payload.get('weak_skills'),
+        skill_scores,
+    )
+    result['recommendation'] = (
+        _normalize_text(llm_payload.get('recommendation'))
+        or f"Focus on {' and '.join(result['weak_skills'])}."
+    )
+    result['level_explanation'] = (
+        _normalize_text(llm_payload.get('level_explanation'))
+        or fallback_result['level_explanation']
+    )
+    result['answer_feedback'] = (
+        _normalize_answer_feedback(llm_payload.get('answer_feedback'), answers)
+        or fallback_result['answer_feedback']
+    )
+    result['next_step'] = (
+        _normalize_text(llm_payload.get('next_step'))
+        or fallback_result['next_step']
+    )
+    return result
+
+
+def _lesson_result_from_llm(module):
+    llm_payload = call_llm_json(*teacher_lesson_prompt(module))
+    if not isinstance(llm_payload, dict):
+        return None
+
+    lesson = _normalize_text(llm_payload.get('lesson'))
+    practice_question = _normalize_text(llm_payload.get('practice_question'))
+    if lesson is None or practice_question is None:
+        return None
+
+    return {
+        'lesson': lesson,
+        'practice_question': practice_question,
+    }
+
+
+def _teacher_feedback_from_llm(module, answer):
+    llm_payload = call_llm_json(*teacher_feedback_prompt(module, answer))
+    if not isinstance(llm_payload, dict):
+        return None
+
+    score = _normalize_feedback_score(llm_payload.get('score'))
+    feedback = _normalize_text(llm_payload.get('feedback'))
+    if score is None or feedback is None:
+        return None
+
+    return score, feedback
+
+
+def _coach_summary_from_llm(profile_level, weakest_skill, recent_session_count):
+    llm_payload = call_llm_json(
+        *coach_summary_prompt(profile_level, weakest_skill, recent_session_count)
+    )
+    if not isinstance(llm_payload, dict):
+        return None
+
+    summary = _normalize_text(llm_payload.get('summary'))
+    next_step = _normalize_text(llm_payload.get('next_step'))
+    if summary is None or next_step is None:
+        return None
+
+    return {
+        'summary': summary,
+        'next_step': next_step,
+    }
+
+
 @transaction.atomic
 def evaluate_diagnostic(user, answers):
-    diagnostic_result = _diagnostic_result_from_llm(answers)
+    rule_based_result = _build_rule_based_diagnostic_result(answers)
+    diagnostic_result = _diagnostic_result_from_llm(answers, rule_based_result)
     if diagnostic_result is None:
-        skill_scores = score_diagnostic_answers(answers)
-        average_score = sum(skill_scores.values()) / len(skill_scores)
-        overall_level = _level_for_score(average_score)
-        weakest = sorted(skill_scores, key=lambda name: (skill_scores[name], name))[:2]
-        diagnostic_result = {
-            'overall_level': overall_level,
-            'skill_scores': skill_scores,
-            'weak_skills': weakest,
-            'recommendation': f"Focus on {' and '.join(weakest)}.",
-        }
+        diagnostic_result = rule_based_result
 
     profile, _ = LearnerProfile.objects.get_or_create(user=user)
     profile.current_level = diagnostic_result['overall_level']

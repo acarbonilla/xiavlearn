@@ -1,21 +1,25 @@
 def diagnostic_prompt(answers):
     system_prompt = (
-        'You are an English learning assessment assistant. '
-        'Return only valid JSON with keys overall_level, skill_scores, '
-        'weak_skills, and recommendation. skill_scores must include '
-        'Grammar, Vocabulary, Speaking, Listening, and Pronunciation as '
-        'integer values from 0 to 100. overall_level must be one of '
-        'A1, A2, B1, or B2. weak_skills must be the two weakest skill names.'
+        'You are an English learning assessment assistant. Return only valid '
+        'JSON with keys overall_level, skill_scores, weak_skills, '
+        'recommendation, level_explanation, answer_feedback, and next_step. '
+        'skill_scores must include Grammar, Vocabulary, Speaking, Listening, '
+        'and Pronunciation as integer values from 0 to 100. overall_level '
+        'must be one of A1, A2, B1, or B2. weak_skills must be the two '
+        'weakest skill names. level_explanation must explain why that level '
+        'was assigned. answer_feedback must be an array with one object per '
+        'answer, and each object must include question, answer, and feedback. '
+        'next_step must be one short action-oriented sentence.'
     )
-    formatted_answers = '\n'.join(
+    formatted_answers = '\n\n'.join(
         f"Question: {item.get('question', '').strip()}\n"
         f"Answer: {item.get('answer', '').strip()}"
         for item in answers
     )
     user_prompt = (
-        'Evaluate these diagnostic responses for an English learner. '\
-        'Be concise, deterministic, and aligned to CEFR-style beginner '\
-        'to intermediate feedback.\n\n'
+        'Evaluate these diagnostic responses for an English learner. '
+        'Be concise, deterministic, supportive, and aligned to CEFR-style '
+        'beginner-to-intermediate feedback. Return JSON only.\n\n'
         f'{formatted_answers}'
     )
     return system_prompt, user_prompt

@@ -54,11 +54,20 @@ export type DashboardData = {
   }>;
 };
 
+export type DiagnosticAnswerFeedback = {
+  question: string;
+  answer: string;
+  feedback: string;
+};
+
 export type DiagnosticResult = {
   overall_level: string;
   skill_scores: Record<string, number>;
   weak_skills: string[];
   recommendation: string;
+  level_explanation: string;
+  answer_feedback: DiagnosticAnswerFeedback[];
+  next_step: string;
 };
 
 export type RecommendationData = {

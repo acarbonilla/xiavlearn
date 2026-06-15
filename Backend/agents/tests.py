@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.contrib.auth.models import User
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -120,6 +122,17 @@ class AgentMVPAPITests(APITestCase):
             data['weak_skills'],
             ['Listening', 'Speaking'],
         )
+        self.assertIn('Your level is A2', data['level_explanation'])
+        self.assertEqual(len(data['answer_feedback']), 1)
+        self.assertEqual(
+            data['answer_feedback'][0]['question'],
+            'Introduce yourself in English.',
+        )
+        self.assertTrue(data['answer_feedback'][0]['feedback'])
+        self.assertEqual(
+            data['next_step'],
+            'Review your weak skills and start the recommended module.',
+        )
         self.assertEqual(
             LearnerProfile.objects.get(user=self.user).current_level,
             'A2',
@@ -135,6 +148,89 @@ class AgentMVPAPITests(APITestCase):
             self.speaking_module.id,
         )
         self.assertIn('Speaking', recommendation_data['reason'])
+
+    @patch('agents.services.call_llm_json')
+    def test_diagnostic_uses_llm_result_when_available(self, mock_call_llm_json):
+        self.authenticate()
+        mock_call_llm_json.return_value = {
+            'overall_level': 'B1',
+            'skill_scores': {
+                'Grammar': 74,
+                'Vocabulary': 78,
+                'Speaking': 67,
+                'Listening': 65,
+                'Pronunciation': 70,
+            },
+            'weak_skills': ['Listening', 'Speaking'],
+            'recommendation': 'Focus on Listening and Speaking.',
+            'level_explanation': 'Your level is B1 because you can express connected ideas with some detail.',
+            'answer_feedback': [
+                {
+                    'question': 'Introduce yourself in English.',
+                    'answer': 'My name is Ana and I study every night.',
+                    'feedback': 'Good response. Add more detail about your routine.',
+                }
+            ],
+            'next_step': 'Review your weak skills and start the recommended module.',
+        }
+
+        response = self.client.post(
+            '/api/diagnostic/evaluate/',
+            {
+                'answers': [
+                    {
+                        'question': 'Introduce yourself in English.',
+                        'answer': 'My name is Ana and I study every night.',
+                    }
+                ]
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['overall_level'], 'B1')
+        self.assertEqual(data['skill_scores']['Grammar'], 74)
+        self.assertEqual(
+            data['level_explanation'],
+            'Your level is B1 because you can express connected ideas with some detail.',
+        )
+        self.assertEqual(
+            data['answer_feedback'][0]['feedback'],
+            'Good response. Add more detail about your routine.',
+        )
+        self.assertEqual(
+            LearnerProfile.objects.get(user=self.user).current_level,
+            'B1',
+        )
+
+    @patch('agents.services.call_llm_json')
+    def test_diagnostic_falls_back_when_llm_payload_is_invalid(self, mock_call_llm_json):
+        self.authenticate()
+        mock_call_llm_json.return_value = {
+            'overall_level': 'B1',
+            'weak_skills': ['Listening', 'Speaking'],
+        }
+
+        response = self.client.post(
+            '/api/diagnostic/evaluate/',
+            {
+                'answers': [
+                    {
+                        'question': 'Describe what you did yesterday.',
+                        'answer': 'Yesterday I go to school.',
+                    }
+                ]
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertNotEqual(data['overall_level'], 'B1')
+        self.assertIn('Your level is', data['level_explanation'])
+        self.assertEqual(len(data['answer_feedback']), 1)
+        self.assertIn('past tense', data['answer_feedback'][0]['feedback'].lower())
 
     def test_recommendation_and_dashboard_reuse_same_module(self):
         self.authenticate()

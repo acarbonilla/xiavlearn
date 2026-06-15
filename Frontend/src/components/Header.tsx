@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { type AuthUser, getCurrentUser, logoutUser } from "@/lib/api";
@@ -13,9 +13,13 @@ const links = [
   ["Study Plan", "/study-plan"],
 ];
 
+const publicRoutes = new Set(["/", "/login", "/signup"]);
+
 export default function Header() {
+  const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(null);
+  const isPublicRoute = pathname ? publicRoutes.has(pathname) : false;
 
   const refreshUser = useCallback(() => {
     getCurrentUser()
@@ -24,16 +28,22 @@ export default function Header() {
   }, []);
 
   useEffect(() => {
+    if (isPublicRoute) {
+      return;
+    }
+
     refreshUser();
     window.addEventListener("xiav-auth-change", refreshUser);
     return () => window.removeEventListener("xiav-auth-change", refreshUser);
-  }, [refreshUser]);
+  }, [isPublicRoute, refreshUser]);
 
   async function handleLogout() {
     await logoutUser();
     setUser(null);
     router.push("/login");
   }
+
+  const activeUser = isPublicRoute ? null : user;
 
   return (
     <header className="sticky top-0 z-10 border-b border-[#dce4ef] bg-white/90 backdrop-blur">
@@ -47,9 +57,9 @@ export default function Header() {
               {label}
             </Link>
           ))}
-          {user ? (
+          {activeUser ? (
             <>
-              <span className="text-[#14213d]">{user.username}</span>
+              <span className="text-[#14213d]">{activeUser.username}</span>
               <button
                 className="font-semibold text-[#335cff]"
                 onClick={handleLogout}
