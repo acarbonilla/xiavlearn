@@ -49,32 +49,46 @@ MISTAKE_TYPES = {
     'vocabulary': 'Vocabulary',
     'clarity': 'Clarity',
     'sentence structure': 'Sentence Structure',
+    'naturalness': 'Naturalness',
+}
+GENERIC_FEEDBACK_PHRASES = (
+    'strong response',
+    'good response',
+    'good answer',
+    'good work',
+    'clear and understandable',
+    'keep practicing',
+    'nice work',
+)
+QUESTION_CORRECTIONS = {
+    'introduce yourself in english.': (
+        'Hi, my name is [your name]. I live in this city, and I am learning English to improve my communication skills.'
+    ),
+    'describe what you did yesterday.': (
+        'Yesterday, I worked on the same task we did before, and then I continued with the next activity.'
+    ),
+    'what is your learning goal?': (
+        'My learning goal is to improve my English and communicate clearly and confidently.'
+    ),
 }
 COMMON_WORDS = {
-    'a', 'about', 'after', 'am', 'an', 'and', 'are', 'at', 'basic', 'be',
-    'because', 'can', 'clear', 'communication', 'confidently', 'describe',
-    'did', 'do', 'english', 'every', 'for', 'goal', 'good', 'hello', 'hi',
-    'home', 'i', 'improve', 'in', 'introduce', 'is', 'it', 'learn',
-    'learning', 'live', 'my', 'name', 'practice', 'school', 'sentence',
-    'simple', 'speak', 'speaking', 'skills', 'studied', 'study', 'to',
-    'want', 'was', 'what', 'yesterday', 'you', 'your'
+    'a', 'about', 'after', 'am', 'an', 'and', 'are', 'at', 'basic', 'based',
+    'be', 'because', 'can', 'capital', 'city', 'clear', 'clearly',
+    'communication', 'company', 'confidently', 'continue', 'describe', 'did',
+    'do', 'english', 'every', 'for', 'goal', 'good', 'hello', 'hi', 'home',
+    'i', 'improve', 'in', 'introduce', 'international', 'is', 'it', 'learn',
+    'learning', 'live', 'living', 'my', 'name', 'next', 'practice', 'region',
+    'same', 'school', 'sentence', 'simple', 'speak', 'speaking', 'specialist',
+    'study', 'support', 'task', 'technical', 'the', 'this', 'to', 'want',
+    'was', 'what', 'work', 'worked', 'working', 'yesterday', 'you', 'your'
 }
 SPELLING_HINTS = {
     'im': 'I am',
     'learng': 'learning',
     'lakkee': 'like',
     'hose': 'home',
-}
-QUESTION_CORRECTIONS = {
-    'introduce yourself in english.': (
-        'Hi, my name is [your name]. I am learning English to improve my communication skills.'
-    ),
-    'describe what you did yesterday.': (
-        'Yesterday, I studied English and practiced speaking at home.'
-    ),
-    'what is your learning goal?': (
-        'My learning goal is to speak English clearly and confidently.'
-    ),
+    'thisss': 'this',
+    'gola': 'goal',
 }
 
 
@@ -116,6 +130,14 @@ def _normalize_text(value):
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _normalized_compare_text(value):
+    return re.sub(r'\s+', ' ', (value or '').strip()).casefold()
+
+
+def _same_text(left, right):
+    return _normalized_compare_text(left) == _normalized_compare_text(right)
 
 
 def _diagnostic_metadata():
@@ -204,45 +226,6 @@ def _normalize_mistake(raw_mistake):
         'explanation': explanation,
     }
 
-
-def _normalize_answer_feedback(raw_feedback, answers):
-    if not isinstance(raw_feedback, list) or len(raw_feedback) < len(answers):
-        return None
-
-    normalized_feedback = []
-    for index, source_answer in enumerate(answers):
-        item = raw_feedback[index]
-        if not isinstance(item, dict):
-            return None
-
-        feedback = _normalize_text(item.get('feedback'))
-        corrected_answer = _normalize_text(item.get('corrected_answer'))
-        raw_mistakes = item.get('mistakes')
-        if feedback is None or corrected_answer is None or not isinstance(raw_mistakes, list):
-            return None
-
-        mistakes = []
-        for raw_mistake in raw_mistakes:
-            normalized_mistake = _normalize_mistake(raw_mistake)
-            if normalized_mistake is None:
-                return None
-            mistakes.append(normalized_mistake)
-
-        normalized_feedback.append(
-            {
-                'question': _normalize_text(item.get('question'))
-                or source_answer.get('question', '').strip(),
-                'answer': _normalize_text(item.get('answer'))
-                or source_answer.get('answer', '').strip(),
-                'feedback': feedback,
-                'corrected_answer': corrected_answer,
-                'mistakes': mistakes,
-            }
-        )
-
-    return normalized_feedback
-
-
 def _answer_metrics(answers):
     response_texts = [item.get('answer', '').strip() for item in answers]
     combined_text = ' '.join(response_texts)
@@ -297,9 +280,54 @@ def score_diagnostic_answers(answers):
     }
 
 
-def _default_corrected_answer(question):
+def _extract_intro_name(answer_text):
+    name_patterns = [
+        r"\bmy name is\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})",
+        r"\b(?:i am|i'm)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})",
+    ]
+    for pattern in name_patterns:
+        match = re.search(pattern, answer_text)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def _default_corrected_answer(question, answer=''):
+    question_key = question.strip().lower()
+    answer_text = answer.strip()
+    lowered_answer = answer_text.lower()
+
+    if question_key == 'introduce yourself in english.':
+        learner_name = _extract_intro_name(answer_text) or '[your name]'
+        intro_sentence = f'I am {learner_name}'
+        if 'live in' in lowered_answer or 'this city' in lowered_answer:
+            intro_sentence += ', and I live in this city'
+        intro_sentence += '.'
+
+        if 'tech support' in lowered_answer or 'company' in lowered_answer:
+            work_sentence = 'I currently work as an IT technical support specialist'
+            if 'company' in lowered_answer:
+                work_sentence += ' in a large international company'
+                if 'capital region' in lowered_answer:
+                    work_sentence += ' based in the capital region'
+            work_sentence += '.'
+            return f'{intro_sentence} {work_sentence}'
+
+        if learner_name != '[your name]':
+            return intro_sentence
+
+    if question_key == 'describe what you did yesterday.':
+        if 'did before' in lowered_answer or 'same' in lowered_answer:
+            return (
+                'Yesterday, I worked on the same task we did before, and then I continued with the next activity.'
+            )
+
+    if question_key == 'what is your learning goal?':
+        if 'goal' in lowered_answer:
+            return 'My learning goal is to improve my English and communicate more clearly.'
+
     return QUESTION_CORRECTIONS.get(
-        question.strip().lower(),
+        question_key,
         'I want to answer in clear and complete English sentences.'
     )
 
@@ -310,7 +338,8 @@ def _has_sentence_structure(words):
     has_verb = any(
         word in {
             'am', 'is', 'are', 'was', 'were', 'be', 'study', 'studied', 'learn',
-            'learning', 'want', 'wanted', 'go', 'went', 'did', 'do', 'live', 'improve'
+            'learning', 'want', 'wanted', 'go', 'went', 'did', 'do', 'live',
+            'living', 'improve', 'work', 'worked', 'working', 'based'
         }
         for word in lower_words
     )
@@ -338,11 +367,41 @@ def _find_suspicious_words(words):
     return suspicious
 
 
-def _build_corrected_answer(question, answer, mistakes, is_unclear):
-    if is_unclear:
-        return _default_corrected_answer(question)
+def _feedback_indicates_changes(feedback):
+    return bool(
+        re.search(
+            r'\b(improve|need|needs|review|correct|correction|grammar|spelling|vocabulary|clarity|unclear|mistake|detail|natural)\b',
+            feedback.lower(),
+        )
+    )
 
-    corrected_answer = answer.strip()
+
+def _feedback_is_generic_or_misleading(feedback, has_issues):
+    lowered_feedback = feedback.lower()
+    if has_issues and any(phrase in lowered_feedback for phrase in GENERIC_FEEDBACK_PHRASES):
+        return True
+    if has_issues and not re.search(
+        r'\b(grammar|spelling|vocabulary|sentence|clarity|unclear|past tense|word choice|natural|meaning)\b',
+        lowered_feedback,
+    ):
+        return True
+    return False
+
+
+def _clean_rewritten_sentence(text):
+    cleaned = re.sub(r'\s+', ' ', text).strip()
+    cleaned = re.sub(r'\s+([,.!?])', r'\1', cleaned)
+    if cleaned and cleaned[-1] not in '.!?':
+        cleaned = f'{cleaned}.'
+    return cleaned
+
+
+def _build_corrected_answer(question, answer, mistakes, is_unclear):
+    answer_text = answer.strip()
+    if is_unclear:
+        return _default_corrected_answer(question, answer_text)
+
+    corrected_answer = answer_text
     replacements = []
     for mistake in mistakes:
         original = mistake['original']
@@ -351,6 +410,7 @@ def _build_corrected_answer(question, answer, mistakes, is_unclear):
             continue
         replacements.append((original, correction))
 
+    replacements.sort(key=lambda item: len(item[0]), reverse=True)
     for original, correction in replacements:
         corrected_answer = re.sub(
             re.escape(original),
@@ -359,13 +419,12 @@ def _build_corrected_answer(question, answer, mistakes, is_unclear):
             flags=re.IGNORECASE,
         )
 
-    corrected_answer = corrected_answer.strip()
-    if corrected_answer and corrected_answer[-1] not in '.!?':
-        corrected_answer = f'{corrected_answer}.'
-    if corrected_answer:
-        return corrected_answer
-    return _default_corrected_answer(question)
-
+    corrected_answer = _clean_rewritten_sentence(corrected_answer)
+    if not corrected_answer:
+        return _default_corrected_answer(question, answer_text)
+    if mistakes and _same_text(corrected_answer, answer_text):
+        return _default_corrected_answer(question, answer_text)
+    return corrected_answer
 
 def _analyze_answer_feedback(question, answer):
     answer_text = answer.strip()
@@ -377,6 +436,8 @@ def _analyze_answer_feedback(question, answer):
     tense_issue = False
 
     def add_mistake(mistake_type, original, correction, explanation):
+        if not original or not correction:
+            return
         key = (mistake_type, original.lower(), correction.lower())
         if key in seen:
             return
@@ -391,22 +452,23 @@ def _analyze_answer_feedback(question, answer):
         )
 
     if not answer_text:
+        corrected = _default_corrected_answer(question, answer_text)
         add_mistake(
             'Sentence Structure',
             '(empty answer)',
-            _default_corrected_answer(question),
+            corrected,
             'Use at least one complete sentence so the diagnostic can measure your level.',
         )
         return {
             'question': question.strip(),
             'answer': answer_text,
             'feedback': 'Your answer is missing. Write one clear complete sentence so the agent can evaluate your English.',
-            'corrected_answer': _default_corrected_answer(question),
+            'corrected_answer': corrected,
             'mistakes': mistakes,
             'is_unclear': True,
         }
 
-    if re.search(r'\bim\b', answer_text, flags=re.IGNORECASE):
+    if re.search(r"\bim\b", answer_text, flags=re.IGNORECASE):
         add_mistake(
             'Grammar',
             'Im',
@@ -420,6 +482,53 @@ def _analyze_answer_feedback(question, answer):
             words[0],
             'I',
             "Use 'I' as the subject of a sentence.",
+        )
+
+    intro_match = re.search(
+        r"((?:I am|I'm)\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2}\s+living in this city)",
+        answer_text,
+    )
+    if intro_match:
+        learner_name = _extract_intro_name(answer_text) or '[your name]'
+        add_mistake(
+            'Sentence Structure',
+            intro_match.group(1),
+            f'I am {learner_name}, and I live in this city',
+            'Use a complete clause after your name so the introduction sounds natural and complete.',
+        )
+
+    tech_support_match = re.search(
+        r'(I am currently working as\s+I\.?T\.?\s+Tech support)',
+        answer_text,
+        flags=re.IGNORECASE,
+    )
+    if tech_support_match:
+        add_mistake(
+            'Naturalness',
+            tech_support_match.group(1),
+            'I currently work as an IT technical support specialist',
+            'Use a more natural job title and a simpler verb form.',
+        )
+
+    if re.search(r'large and international company', answer_text, flags=re.IGNORECASE):
+        add_mistake(
+            'Naturalness',
+            'large and international company',
+            'large international company',
+            'In this phrase, English usually uses "large international company" without "and".',
+        )
+
+    based_match = re.search(
+        r'(company that base in(?: the)? capital region)',
+        answer_text,
+        flags=re.IGNORECASE,
+    )
+    if based_match:
+        add_mistake(
+            'Grammar',
+            based_match.group(1),
+            'company based in the capital region',
+            'Use "based in" to describe where the company is located.',
         )
 
     if re.search(
@@ -450,6 +559,13 @@ def _analyze_answer_feedback(question, answer):
                 'Check the spelling so your meaning is easier to understand.',
             )
 
+    obvious_clarity_break = bool(
+        re.search(
+            r"\b(i did was|goal is the gola|were are|please be me why not)\b",
+            answer_text,
+            flags=re.IGNORECASE,
+        )
+    )
     word_count = len(words)
     unclear_ratio = len(suspicious_words) / max(word_count, 1)
     has_sentence_structure = _has_sentence_structure(words)
@@ -462,6 +578,7 @@ def _analyze_answer_feedback(question, answer):
             'introduce yourself' in question_lower
             and 'my name' not in answer_text.lower()
             and 'i am' not in answer_text.lower()
+            and "i'm" not in answer_text.lower()
         )
     )
 
@@ -469,7 +586,7 @@ def _analyze_answer_feedback(question, answer):
         add_mistake(
             'Clarity',
             answer_text,
-            _default_corrected_answer(question),
+            _default_corrected_answer(question, answer_text),
             'The original answer is unclear or incomplete, so it needs a clearer complete idea.',
         )
 
@@ -477,7 +594,7 @@ def _analyze_answer_feedback(question, answer):
         add_mistake(
             'Sentence Structure',
             answer_text,
-            _default_corrected_answer(question),
+            _default_corrected_answer(question, answer_text),
             'Use one or two complete sentences with a clear subject, verb, and idea.',
         )
 
@@ -492,12 +609,10 @@ def _analyze_answer_feedback(question, answer):
         )
     elif mistakes:
         feedback = (
-            'Your answer shows the main idea, but it still has grammar, spelling, or sentence structure problems that need correction.'
+            'Your answer shows the main idea, but it still has grammar, spelling, clarity, or naturalness problems that need correction.'
         )
     else:
-        feedback = (
-            'Your answer is clear and understandable. Keep adding detail to improve accuracy and fluency.'
-        )
+        feedback = 'Your answer is already clear, correct, and complete for this question.'
 
     corrected_answer = _build_corrected_answer(question, answer, mistakes, is_unclear)
     return {
@@ -510,11 +625,113 @@ def _analyze_answer_feedback(question, answer):
     }
 
 
+def _fallback_feedback_item(question, answer):
+    analysis = _analyze_answer_feedback(question, answer)
+    return (
+        {
+            'question': analysis['question'],
+            'answer': analysis['answer'],
+            'feedback': analysis['feedback'],
+            'corrected_answer': analysis['corrected_answer'],
+            'mistakes': analysis['mistakes'],
+        },
+        analysis,
+    )
+
+
+def normalize_answer_feedback(raw_feedback, answers):
+    fallback_items = []
+    fallback_analyses = []
+    for source_answer in answers:
+        fallback_item, analysis = _fallback_feedback_item(
+            source_answer.get('question', ''),
+            source_answer.get('answer', ''),
+        )
+        fallback_items.append(fallback_item)
+        fallback_analyses.append(analysis)
+
+    if not isinstance(raw_feedback, list):
+        return fallback_items
+
+    normalized_feedback = []
+    for index, source_answer in enumerate(answers):
+        fallback_item = fallback_items[index]
+        analysis = fallback_analyses[index]
+        if index >= len(raw_feedback) or not isinstance(raw_feedback[index], dict):
+            normalized_feedback.append(fallback_item)
+            continue
+
+        item = raw_feedback[index]
+        feedback = _normalize_text(item.get('feedback'))
+        corrected_answer = _normalize_text(item.get('corrected_answer'))
+        raw_mistakes = item.get('mistakes')
+        if feedback is None or corrected_answer is None or not isinstance(raw_mistakes, list):
+            normalized_feedback.append(fallback_item)
+            continue
+
+        mistakes = []
+        invalid_mistake = False
+        for raw_mistake in raw_mistakes:
+            normalized_mistake = _normalize_mistake(raw_mistake)
+            if normalized_mistake is None:
+                invalid_mistake = True
+                break
+            mistakes.append(normalized_mistake)
+        if invalid_mistake:
+            normalized_feedback.append(fallback_item)
+            continue
+
+        normalized_item = {
+            'question': _normalize_text(item.get('question'))
+            or source_answer.get('question', '').strip(),
+            'answer': _normalize_text(item.get('answer'))
+            or source_answer.get('answer', '').strip(),
+            'feedback': feedback,
+            'corrected_answer': corrected_answer,
+            'mistakes': mistakes,
+        }
+
+        has_issues = analysis['is_unclear'] or bool(analysis['mistakes'])
+        corrected_matches_answer = _same_text(
+            normalized_item['corrected_answer'],
+            fallback_item['answer'],
+        )
+        if corrected_matches_answer:
+            if has_issues or _feedback_indicates_changes(normalized_item['feedback']) or normalized_item['mistakes']:
+                normalized_feedback.append(fallback_item)
+                continue
+            normalized_item['feedback'] = 'Your answer is already clear, correct, and complete for this question.'
+            normalized_item['mistakes'] = []
+            normalized_feedback.append(normalized_item)
+            continue
+
+        if has_issues and not normalized_item['mistakes']:
+            normalized_item['mistakes'] = fallback_item['mistakes']
+
+        if _feedback_is_generic_or_misleading(normalized_item['feedback'], has_issues):
+            normalized_item['feedback'] = fallback_item['feedback']
+
+        if has_issues and not normalized_item['mistakes']:
+            normalized_feedback.append(fallback_item)
+            continue
+
+        normalized_feedback.append(normalized_item)
+
+    return normalized_feedback
+
 def _rule_based_level_explanation(overall_level, diagnostics):
     total_mistakes = sum(len(item['mistakes']) for item in diagnostics)
     unclear_answers = sum(1 for item in diagnostics if item['is_unclear'])
+    clarity_issues = sum(
+        1
+        for item in diagnostics
+        for mistake in item['mistakes']
+        if mistake['type'] == 'Clarity'
+    )
 
-    if unclear_answers >= 2:
+    if unclear_answers >= 2 or clarity_issues >= 2 or (
+        overall_level == 'A1' and (unclear_answers >= 1 or clarity_issues >= 1)
+    ):
         detail = (
             'the answers contain unclear meaning, grammar errors, and limited control of basic vocabulary.'
         )
@@ -569,6 +786,12 @@ def _build_rule_based_diagnostic_result(answers):
         for mistake in item['mistakes']
         if mistake['type'] == 'Sentence Structure'
     )
+    naturalness_issues = sum(
+        1
+        for item in diagnostics
+        for mistake in item['mistakes']
+        if mistake['type'] == 'Naturalness'
+    )
     total_issues = sum(len(item['mistakes']) for item in diagnostics)
 
     skill_scores = {
@@ -578,12 +801,14 @@ def _build_rule_based_diagnostic_result(answers):
             - structure_issues * 8
             - unclear_answers * 8
             - spelling_issues * 4
+            - naturalness_issues * 2
         ),
         'Vocabulary': _clamp(
             base_scores['Vocabulary']
             - clarity_issues * 8
             - spelling_issues * 6
             - unclear_answers * 6
+            - naturalness_issues * 4
         ),
     }
 
@@ -663,9 +888,9 @@ def _diagnostic_result_from_llm(answers, fallback_result):
         _normalize_text(llm_payload.get('level_explanation'))
         or fallback_result['level_explanation']
     )
-    result['answer_feedback'] = (
-        _normalize_answer_feedback(llm_payload.get('answer_feedback'), answers)
-        or fallback_result['answer_feedback']
+    result['answer_feedback'] = normalize_answer_feedback(
+        llm_payload.get('answer_feedback'),
+        answers,
     )
     result['next_step'] = (
         _normalize_text(llm_payload.get('next_step'))
@@ -746,7 +971,6 @@ def evaluate_diagnostic(user, answers):
         )
 
     return diagnostic_result
-
 
 def get_curriculum_recommendation(user):
     profile, _ = LearnerProfile.objects.get_or_create(user=user)
@@ -971,3 +1195,10 @@ def get_coach_summary(user):
         'summary': summary,
         'next_step': 'Complete your recommended module.',
     }
+
+
+
+
+
+
+

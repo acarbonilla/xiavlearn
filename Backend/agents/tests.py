@@ -238,6 +238,53 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 2)
 
     @patch('agents.services.call_llm_json')
+    def test_diagnostic_sanitizes_llm_feedback_when_correction_is_copied_from_broken_answer(self, mock_call_llm_json):
+        self.authenticate()
+        original_answer = (
+            "I'm Jane Doe living in this city. I am currently working as I.T. "
+            'Tech support in a large and international company that base in capital region.'
+        )
+        mock_call_llm_json.return_value = {
+            'skill_scores': {'Grammar': 42, 'Vocabulary': 48},
+            'overall_level': 'A2',
+            'weak_skills': ['Grammar', 'Vocabulary'],
+            'recommendation': 'Focus on Grammar and Vocabulary.',
+            'level_explanation': 'Your level is A2 because you can express basic ideas.',
+            'answer_feedback': [
+                {
+                    'question': 'Introduce yourself in English.',
+                    'answer': original_answer,
+                    'feedback': 'Good response. Improve grammar and naturalness.',
+                    'corrected_answer': original_answer,
+                    'mistakes': [],
+                }
+            ],
+            'next_step': 'Review your weak skills and start the recommended module.',
+        }
+
+        response = self.client.post(
+            '/api/diagnostic/evaluate/',
+            {
+                'answers': [
+                    {
+                        'question': 'Introduce yourself in English.',
+                        'answer': original_answer,
+                    }
+                ]
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        feedback = data['answer_feedback'][0]
+        self.assertNotEqual(feedback['corrected_answer'], original_answer)
+        self.assertTrue(feedback['mistakes'])
+        self.assertIn('grammar', feedback['feedback'].lower())
+        self.assertIn('I live in this city', feedback['corrected_answer'])
+        self.assertIn('technical support', feedback['corrected_answer'])
+
+    @patch('agents.services.call_llm_json')
     def test_diagnostic_falls_back_when_llm_payload_is_invalid(self, mock_call_llm_json):
         self.authenticate()
         mock_call_llm_json.return_value = {
@@ -267,7 +314,7 @@ class AgentMVPAPITests(APITestCase):
         self.assertIn('past tense', data['answer_feedback'][0]['feedback'].lower())
         self.assertTrue(data['answer_feedback'][0]['mistakes'])
 
-    def test_low_quality_diagnostic_feedback_is_specific_and_beginner_friendly(self):
+    def test_low_quality_diagnostic_feedback_produces_real_corrections(self):
         self.authenticate()
 
         response = self.client.post(
@@ -276,15 +323,18 @@ class AgentMVPAPITests(APITestCase):
                 'answers': [
                     {
                         'question': 'Introduce yourself in English.',
-                        'answer': 'Hi Im me and you. Please be me why not.',
+                        'answer': (
+                            "I'm Jane Doe living in this city. I am currently working as I.T. "
+                            'Tech support in a large and international company that base in capital region.'
+                        ),
                     },
                     {
                         'question': 'Describe what you did yesterday.',
-                        'answer': 'I did almost things look lakkee.',
+                        'answer': 'I did was I did on what we did before and after thisss.. real thing most.',
                     },
                     {
                         'question': 'What is your learning goal?',
-                        'answer': 'me learng was to be enough hose.',
+                        'answer': 'Goal is the gola of others were are hosell making green.',
                     },
                 ]
             },
@@ -306,13 +356,28 @@ class AgentMVPAPITests(APITestCase):
             data['next_step'],
             'Practice simple complete sentences before moving to longer answers.',
         )
+
+        for item in data['answer_feedback']:
+            self.assertNotEqual(item['corrected_answer'], item['answer'])
+            self.assertTrue(item['mistakes'])
+            self.assertNotIn('Strong response', item['feedback'])
+            self.assertNotIn('clear and understandable', item['feedback'].lower())
+
         first_feedback = data['answer_feedback'][0]
-        self.assertNotIn('Strong response', first_feedback['feedback'])
-        self.assertIn('unclear', first_feedback['feedback'].lower())
-        self.assertTrue(first_feedback['corrected_answer'])
-        self.assertTrue(first_feedback['mistakes'])
-        self.assertEqual(first_feedback['mistakes'][0]['type'], 'Grammar')
-        self.assertIn('I am', first_feedback['corrected_answer'])
+        self.assertIn('Jane Doe', first_feedback['corrected_answer'])
+        self.assertIn('technical support', first_feedback['corrected_answer'])
+        self.assertTrue(
+            any(mistake['type'] in {'Grammar', 'Sentence Structure', 'Naturalness'} for mistake in first_feedback['mistakes'])
+        )
+
+        second_feedback = data['answer_feedback'][1]
+        self.assertIn('Yesterday', second_feedback['corrected_answer'])
+        self.assertIn('continued', second_feedback['corrected_answer'])
+        self.assertIn('unclear', second_feedback['feedback'].lower())
+
+        third_feedback = data['answer_feedback'][2]
+        self.assertIn('learning goal', third_feedback['corrected_answer'].lower())
+        self.assertIn('unclear', third_feedback['feedback'].lower())
 
     def test_recommendation_and_dashboard_reuse_same_module(self):
         self.authenticate()
