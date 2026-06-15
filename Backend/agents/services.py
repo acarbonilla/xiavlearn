@@ -31,6 +31,16 @@ SKILL_NAMES = [
     'Listening',
     'Pronunciation',
 ]
+DIAGNOSTIC_ASSESSMENT_MODE = 'text_only'
+DIAGNOSTIC_ASSESSED_SKILLS = ['Grammar', 'Vocabulary']
+DIAGNOSTIC_UNASSESSED_SKILLS = ['Speaking', 'Listening', 'Pronunciation']
+DIAGNOSTIC_SKILL_STATUS = {
+    'Grammar': 'Assessed',
+    'Vocabulary': 'Assessed',
+    'Speaking': 'Requires voice test',
+    'Listening': 'Requires audio test',
+    'Pronunciation': 'Requires voice test',
+}
 CEFR_LEVELS = {'A1', 'A2', 'B1', 'B2'}
 SKILL_NAME_LOOKUP = {name.lower(): name for name in SKILL_NAMES}
 MISTAKE_TYPES = {
@@ -108,22 +118,37 @@ def _normalize_text(value):
     return normalized or None
 
 
-def _normalize_skill_scores(raw_scores):
+def _diagnostic_metadata():
+    return {
+        'assessment_mode': DIAGNOSTIC_ASSESSMENT_MODE,
+        'assessed_skills': list(DIAGNOSTIC_ASSESSED_SKILLS),
+        'unassessed_skills': list(DIAGNOSTIC_UNASSESSED_SKILLS),
+        'skill_status': dict(DIAGNOSTIC_SKILL_STATUS),
+    }
+
+
+def _normalize_skill_scores(raw_scores, allowed_skills=None):
     if not isinstance(raw_scores, dict):
         return None
 
+    allowed_skills = allowed_skills or SKILL_NAMES
+    allowed_lookup = {skill.lower(): skill for skill in allowed_skills}
     normalized_scores = {}
     for raw_name, raw_score in raw_scores.items():
         if not isinstance(raw_name, str) or not isinstance(raw_score, (int, float)):
             continue
         skill_name = SKILL_NAME_LOOKUP.get(raw_name.strip().lower())
-        if skill_name is None:
+        if skill_name is None or skill_name.lower() not in allowed_lookup:
             continue
-        normalized_scores[skill_name] = _clamp(raw_score)
+        normalized_scores[allowed_lookup[skill_name.lower()]] = _clamp(raw_score)
 
-    if set(normalized_scores) != set(SKILL_NAMES):
+    if set(normalized_scores) != set(allowed_skills):
         return None
-    return normalized_scores
+
+    return {
+        skill_name: normalized_scores[skill_name]
+        for skill_name in allowed_skills
+    }
 
 
 def _normalize_weak_skills(raw_weak_skills, skill_scores):
@@ -137,7 +162,7 @@ def _normalize_weak_skills(raw_weak_skills, skill_scores):
         if not isinstance(raw_skill, str):
             continue
         skill_name = SKILL_NAME_LOOKUP.get(raw_skill.strip().lower())
-        if skill_name and skill_name not in seen:
+        if skill_name in skill_scores and skill_name not in seen:
             normalized.append(skill_name)
             seen.add(skill_name)
         if len(normalized) == 2:
@@ -255,7 +280,6 @@ def _answer_metrics(answers):
 def score_diagnostic_answers(answers):
     metrics = _answer_metrics(answers)
     word_count = metrics['word_count']
-    completion = metrics['completion_ratio']
     sentence_bonus = min(metrics['sentence_count'] * 5, 10)
 
     return {
@@ -269,15 +293,6 @@ def score_diagnostic_answers(answers):
             48
             + min(metrics['unique_count'] * 2, 22)
             + min(metrics['long_word_count'] * 2, 8)
-        ),
-        'Speaking': _clamp(
-            38 + min(word_count * 1.5, 24) + completion * 6
-        ),
-        'Listening': _clamp(
-            42 + completion * 12 + min(len(answers), 3) * 2
-        ),
-        'Pronunciation': _clamp(
-            48 + min(word_count, 12) + completion * 3
         ),
     }
 
@@ -570,22 +585,6 @@ def _build_rule_based_diagnostic_result(answers):
             - spelling_issues * 6
             - unclear_answers * 6
         ),
-        'Speaking': _clamp(
-            base_scores['Speaking']
-            - unclear_answers * 12
-            - grammar_issues * 6
-            - total_issues * 2
-        ),
-        'Listening': _clamp(
-            base_scores['Listening']
-            - unclear_answers * 10
-            - total_issues * 2
-        ),
-        'Pronunciation': _clamp(
-            base_scores['Pronunciation']
-            - spelling_issues * 8
-            - clarity_issues * 4
-        ),
     }
 
     if unclear_answers >= 2 or total_issues >= 6:
@@ -607,6 +606,7 @@ def _build_rule_based_diagnostic_result(answers):
         next_step = 'Review your weak skills and start the recommended module.'
 
     return {
+        **_diagnostic_metadata(),
         'overall_level': overall_level,
         'skill_scores': skill_scores,
         'weak_skills': weak_skills,
@@ -631,7 +631,10 @@ def _diagnostic_result_from_llm(answers, fallback_result):
     if not isinstance(llm_payload, dict):
         return None
 
-    skill_scores = _normalize_skill_scores(llm_payload.get('skill_scores'))
+    skill_scores = _normalize_skill_scores(
+        llm_payload.get('skill_scores'),
+        DIAGNOSTIC_ASSESSED_SKILLS,
+    )
     if skill_scores is None:
         return None
 
@@ -642,7 +645,10 @@ def _diagnostic_result_from_llm(answers, fallback_result):
     if overall_level not in CEFR_LEVELS:
         overall_level = _level_for_score(average_score)
 
-    result = dict(fallback_result)
+    result = {
+        **fallback_result,
+        **_diagnostic_metadata(),
+    }
     result['skill_scores'] = skill_scores
     result['overall_level'] = overall_level
     result['weak_skills'] = _normalize_weak_skills(
@@ -726,7 +732,7 @@ def evaluate_diagnostic(user, answers):
     profile.current_level = diagnostic_result['overall_level']
     profile.save(update_fields=['current_level', 'updated_at'])
 
-    for skill_name in SKILL_NAMES:
+    for skill_name in DIAGNOSTIC_ASSESSED_SKILLS:
         skill, _ = Skill.objects.get_or_create(name=skill_name)
         score = diagnostic_result['skill_scores'][skill_name]
         SkillMastery.objects.update_or_create(

@@ -82,25 +82,67 @@ export default function DiagnosticPage() {
         </form>
       ) : (
         <section className="mt-8 grid gap-6">
-          <Card className="bg-[#14213d] text-white">
-            <p className="text-sm font-bold text-[#aebbe8]">Assigned level</p>
-            <p className="mt-2 text-5xl font-black">{result.overall_level}</p>
-            <p className="mt-4 text-lg font-semibold text-white">
-              {result.recommendation}
-            </p>
-            <p className="mt-4 text-[#d6def1]">{result.level_explanation}</p>
+          <Card>
+            <div
+              className="-m-6 rounded-2xl p-6 text-white"
+              style={{ backgroundColor: "#14213d" }}
+            >
+              <p className="text-sm font-bold uppercase tracking-[0.16em]" style={{ color: "#aebbe8" }}>
+                Text-only assessment
+              </p>
+              <p className="mt-3 text-sm font-bold" style={{ color: "#d6def1" }}>
+                Assigned level
+              </p>
+              <p className="mt-2 text-5xl font-black text-white">{result.overall_level}</p>
+              <p className="mt-4 text-lg font-semibold text-white">
+                {result.recommendation}
+              </p>
+              <p className="mt-4" style={{ color: "#d6def1" }}>
+                {result.level_explanation}
+              </p>
+            </div>
           </Card>
 
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {Object.entries(result.skill_scores).map(([skill, score]) => (
-              <SkillScoreCard key={skill} score={score} skill={skill} />
-            ))}
-          </div>
+          <section className="grid gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-[#14213d]">Assessed skills</h2>
+              <p className="mt-1 text-sm text-[#60708a]">
+                This diagnostic scores grammar and vocabulary from written answers only.
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {result.assessed_skills.map((skill) => {
+                const score = result.skill_scores[skill];
+                return typeof score === "number" ? (
+                  <SkillScoreCard key={skill} score={score} skill={skill} />
+                ) : null;
+              })}
+            </div>
+          </section>
+
+          <section className="grid gap-4">
+            <div>
+              <h2 className="text-xl font-bold text-[#14213d]">Skills not assessed yet</h2>
+              <p className="mt-1 text-sm text-[#60708a]">
+                Speaking, listening, and pronunciation need voice or audio-based checks.
+              </p>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              {result.unassessed_skills.map((skill) => (
+                <Card key={skill}>
+                  <p className="text-lg font-bold text-[#14213d]">{skill}</p>
+                  <p className="mt-3 text-sm font-semibold uppercase tracking-[0.14em] text-[#335cff]">
+                    {result.skill_status[skill]}
+                  </p>
+                </Card>
+              ))}
+            </div>
+          </section>
 
           <Card>
             <h2 className="text-xl font-bold text-[#14213d]">What to focus on next</h2>
             <p className="mt-2 text-[#60708a]">
-              Weak skills: {result.weak_skills.join(", ")}
+              Weak assessed skills: {result.weak_skills.join(", ")}
             </p>
             <p className="mt-4 text-[#42536b]">{result.next_step}</p>
             <div className="mt-5 flex flex-wrap gap-3">
@@ -129,6 +171,29 @@ export default function DiagnosticPage() {
                   <p className="mt-1 text-[#14213d]">{item.answer}</p>
                   <p className="mt-4 text-sm text-[#60708a]">Agent feedback</p>
                   <p className="mt-1 text-[#14213d]">{item.feedback}</p>
+                  <p className="mt-4 text-sm text-[#60708a]">Suggested correction</p>
+                  <p className="mt-1 text-[#14213d]">{item.corrected_answer}</p>
+                  {item.mistakes.length ? (
+                    <div className="mt-4 grid gap-3">
+                      {item.mistakes.map((mistake, mistakeIndex) => (
+                        <div
+                          className="rounded-2xl border border-[#dce4ef] bg-white p-4"
+                          key={`${mistake.type}-${mistakeIndex}`}
+                        >
+                          <p className="text-sm font-bold text-[#14213d]">{mistake.type}</p>
+                          <p className="mt-2 text-sm text-[#60708a]">
+                            <span className="font-semibold text-[#42536b]">Original:</span>{" "}
+                            {mistake.original}
+                          </p>
+                          <p className="mt-1 text-sm text-[#60708a]">
+                            <span className="font-semibold text-[#42536b]">Correction:</span>{" "}
+                            {mistake.correction}
+                          </p>
+                          <p className="mt-2 text-sm text-[#42536b]">{mistake.explanation}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </section>
               ))}
             </div>

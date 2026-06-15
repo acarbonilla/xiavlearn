@@ -95,7 +95,7 @@ class AgentMVPAPITests(APITestCase):
             self.assertFalse(response.data['success'])
             self.assertTrue(response.data['error'])
 
-    def test_diagnostic_updates_profile_and_all_skill_masteries(self):
+    def test_diagnostic_updates_profile_and_only_text_assessed_masteries(self):
         self.authenticate()
 
         response = self.client.post(
@@ -113,9 +113,19 @@ class AgentMVPAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = self.assert_success_response(response)
+        self.assertEqual(data['assessment_mode'], 'text_only')
+        self.assertEqual(data['assessed_skills'], ['Grammar', 'Vocabulary'])
+        self.assertEqual(
+            data['unassessed_skills'],
+            ['Speaking', 'Listening', 'Pronunciation'],
+        )
         self.assertEqual(data['overall_level'], 'A2')
-        self.assertEqual(set(data['skill_scores']), set(self.skills))
-        self.assertEqual(data['weak_skills'], ['Listening', 'Speaking'])
+        self.assertEqual(set(data['skill_scores']), {'Grammar', 'Vocabulary'})
+        self.assertNotIn('Speaking', data['skill_scores'])
+        self.assertEqual(data['skill_status']['Grammar'], 'Assessed')
+        self.assertEqual(data['skill_status']['Speaking'], 'Requires voice test')
+        self.assertEqual(data['skill_status']['Listening'], 'Requires audio test')
+        self.assertEqual(data['weak_skills'], ['Vocabulary', 'Grammar'])
         self.assertIn('Your level is A2', data['level_explanation'])
         self.assertEqual(len(data['answer_feedback']), 1)
         self.assertEqual(
@@ -130,20 +140,29 @@ class AgentMVPAPITests(APITestCase):
             'Review your weak skills and start the recommended module.',
         )
         self.assertEqual(LearnerProfile.objects.get(user=self.user).current_level, 'A2')
-        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 5)
+        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 2)
+        self.assertEqual(
+            SkillMastery.objects.filter(
+                user=self.user,
+                skill__name__in=['Speaking', 'Listening', 'Pronunciation'],
+            ).count(),
+            0,
+        )
         recommendation = self.client.get('/api/curriculum/recommendation/')
         recommendation_data = self.assert_success_response(recommendation)
         self.assertEqual(
             recommendation_data['recommended_module']['id'],
-            self.speaking_module.id,
+            self.grammar_module.id,
         )
-        self.assertIn('Speaking', recommendation_data['reason'])
+        self.assertIn('Grammar', recommendation_data['reason'])
 
     @patch('agents.services.call_llm_json')
-    def test_diagnostic_uses_llm_result_when_available(self, mock_call_llm_json):
+    def test_diagnostic_uses_llm_result_when_available_and_sanitizes_unassessed_scores(self, mock_call_llm_json):
         self.authenticate()
         mock_call_llm_json.return_value = {
-            'overall_level': 'B1',
+            'assessment_mode': 'text_only',
+            'assessed_skills': ['Grammar', 'Vocabulary'],
+            'unassessed_skills': ['Speaking', 'Listening', 'Pronunciation'],
             'skill_scores': {
                 'Grammar': 74,
                 'Vocabulary': 78,
@@ -151,8 +170,16 @@ class AgentMVPAPITests(APITestCase):
                 'Listening': 65,
                 'Pronunciation': 70,
             },
+            'skill_status': {
+                'Grammar': 'Assessed',
+                'Vocabulary': 'Assessed',
+                'Speaking': 'Needs Review',
+                'Listening': 'Needs Review',
+                'Pronunciation': 'Needs Review',
+            },
+            'overall_level': 'B1',
             'weak_skills': ['Listening', 'Speaking'],
-            'recommendation': 'Focus on Listening and Speaking.',
+            'recommendation': 'Focus on writing clearer sentences with stronger grammar and vocabulary.',
             'level_explanation': 'Your level is B1 because you can express connected ideas with some detail.',
             'answer_feedback': [
                 {
@@ -189,7 +216,12 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = self.assert_success_response(response)
         self.assertEqual(data['overall_level'], 'B1')
-        self.assertEqual(data['skill_scores']['Grammar'], 74)
+        self.assertEqual(
+            data['skill_scores'],
+            {'Grammar': 74, 'Vocabulary': 78},
+        )
+        self.assertEqual(data['skill_status']['Speaking'], 'Requires voice test')
+        self.assertEqual(data['weak_skills'], ['Grammar', 'Vocabulary'])
         self.assertEqual(
             data['level_explanation'],
             'Your level is B1 because you can express connected ideas with some detail.',
@@ -203,6 +235,7 @@ class AgentMVPAPITests(APITestCase):
             'Sentence Structure',
         )
         self.assertEqual(LearnerProfile.objects.get(user=self.user).current_level, 'B1')
+        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 2)
 
     @patch('agents.services.call_llm_json')
     def test_diagnostic_falls_back_when_llm_payload_is_invalid(self, mock_call_llm_json):
@@ -229,6 +262,7 @@ class AgentMVPAPITests(APITestCase):
         data = self.assert_success_response(response)
         self.assertNotEqual(data['overall_level'], 'B1')
         self.assertIn('Your level is', data['level_explanation'])
+        self.assertEqual(set(data['skill_scores']), {'Grammar', 'Vocabulary'})
         self.assertEqual(len(data['answer_feedback']), 1)
         self.assertIn('past tense', data['answer_feedback'][0]['feedback'].lower())
         self.assertTrue(data['answer_feedback'][0]['mistakes'])
@@ -261,7 +295,11 @@ class AgentMVPAPITests(APITestCase):
         data = self.assert_success_response(response)
         self.assertEqual(data['overall_level'], 'A1')
         self.assertLess(data['skill_scores']['Grammar'], 50)
-        self.assertLess(data['skill_scores']['Speaking'], 50)
+        self.assertLess(data['skill_scores']['Vocabulary'], 50)
+        self.assertNotIn('Speaking', data['skill_scores'])
+        self.assertEqual(data['skill_status']['Speaking'], 'Requires voice test')
+        self.assertEqual(data['skill_status']['Listening'], 'Requires audio test')
+        self.assertEqual(data['skill_status']['Pronunciation'], 'Requires voice test')
         self.assertIn('clear basic sentences', data['recommendation'])
         self.assertIn('unclear', data['level_explanation'].lower())
         self.assertEqual(
