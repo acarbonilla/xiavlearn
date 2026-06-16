@@ -8,6 +8,11 @@ from .views import (
     TeacherFeedbackView,
     TeacherSessionView,
 )
+from .voice_views import (
+    PronunciationEvaluateView,
+    VoiceDiagnosticPromptsView,
+    VoiceDiagnosticTTSView,
+)
 
 
 urlpatterns = [
@@ -40,5 +45,20 @@ urlpatterns = [
         'coach/summary/',
         CoachSummaryView.as_view(),
         name='coach-summary',
+    ),
+    path(
+        'voice-diagnostic/prompts/',
+        VoiceDiagnosticPromptsView.as_view(),
+        name='voice-diagnostic-prompts',
+    ),
+    path(
+        'voice-diagnostic/tts/',
+        VoiceDiagnosticTTSView.as_view(),
+        name='voice-diagnostic-tts',
+    ),
+    path(
+        'voice-diagnostic/pronunciation/evaluate/',
+        PronunciationEvaluateView.as_view(),
+        name='voice-diagnostic-pronunciation-evaluate',
     ),
 ]

@@ -9,6 +9,7 @@ import { type AuthUser, getCurrentUser, logoutUser } from "@/lib/api";
 const links = [
   ["Dashboard", "/dashboard"],
   ["Diagnostic", "/diagnostic"],
+  ["Voice Diagnostic", "/voice-diagnostic"],
   ["Recommendation", "/recommendation"],
   ["Study Plan", "/study-plan"],
 ];

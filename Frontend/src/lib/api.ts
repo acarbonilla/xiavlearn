@@ -116,6 +116,27 @@ export type CoachSummary = {
   next_step: string;
 };
 
+export type VoiceDiagnosticPrompts = {
+  pronunciation: {
+    target_sentence: string;
+  };
+};
+
+export type PronunciationResult = {
+  target_sentence: string;
+  transcript: string;
+  score: number;
+  status: string;
+  feedback: string;
+  word_accuracy: number;
+  missing_words: string[];
+  extra_words: string[];
+  substituted_words?: Array<{
+    expected: string;
+    heard: string;
+  }>;
+};
+
 type ApiEnvelope<T> = {
   success: boolean;
   data: T;
@@ -154,12 +175,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     await getCsrfToken();
   }
   const csrfToken = readCsrfCookie();
+  const isFormData =
+    typeof FormData !== "undefined" && init?.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     credentials: "include",
     headers: {
       Accept: "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
       ...(method !== "GET" && csrfToken ? { "X-CSRFToken": csrfToken } : {}),
       ...init?.headers,
     },
@@ -189,6 +212,41 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return payload.data;
+}
+
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const method = init?.method?.toUpperCase() ?? "GET";
+  if (method !== "GET" && !readCsrfCookie()) {
+    await getCsrfToken();
+  }
+  const csrfToken = readCsrfCookie();
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+    headers: {
+      Accept: "audio/mpeg,application/json",
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(method !== "GET" && csrfToken ? { "X-CSRFToken": csrfToken } : {}),
+      ...init?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    let payload: { error?: unknown } | null = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(AUTH_NOTE);
+    }
+    throw new Error(
+      payload?.error ? getErrorMessage(payload.error) : `Request failed with status ${response.status}.`,
+    );
+  }
+
+  return response.blob();
 }
 
 function notifyAuthChange() {
@@ -276,4 +334,26 @@ export function generateStudyPlan() {
 
 export function getCoachSummary() {
   return request<CoachSummary>("/api/coach/summary/");
+}
+
+export function getVoiceDiagnosticPrompts() {
+  return request<VoiceDiagnosticPrompts>("/api/voice-diagnostic/prompts/");
+}
+
+export function requestTTS(text: string) {
+  return requestBlob("/api/voice-diagnostic/tts/", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
+export function evaluatePronunciation(audioBlob: Blob, targetSentence: string) {
+  const formData = new FormData();
+  formData.append("audio_file", audioBlob, "pronunciation.webm");
+  formData.append("target_sentence", targetSentence);
+
+  return request<PronunciationResult>("/api/voice-diagnostic/pronunciation/evaluate/", {
+    method: "POST",
+    body: formData,
+  });
 }

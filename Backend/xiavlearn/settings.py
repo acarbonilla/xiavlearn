@@ -120,3 +120,8 @@ REST_FRAMEWORK = {
     ],
     'EXCEPTION_HANDLER': 'xiavlearn.api.api_exception_handler',
 }
+
+DEEPGRAM_API_KEY = config('DEEPGRAM_API_KEY', default='')
+DEEPGRAM_TTS_MODEL = config('DEEPGRAM_TTS_MODEL', default='aura-2-thalia-en')
+DEEPGRAM_STT_MODEL = config('DEEPGRAM_STT_MODEL', default='nova-2')
+USE_VOICE_DIAGNOSTIC = config('USE_VOICE_DIAGNOSTIC', default=False, cast=bool)

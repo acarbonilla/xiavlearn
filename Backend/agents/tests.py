@@ -1,6 +1,8 @@
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -443,6 +445,92 @@ class AgentMVPAPITests(APITestCase):
             self.assertNotIn('already clear', item['feedback'].lower())
             self.assertNotEqual(item['corrected_answer'], item['answer'])
             self.assertTrue(item['mistakes'])
+
+    def test_voice_diagnostic_prompts_returns_pronunciation_target(self):
+        self.authenticate()
+
+        response = self.client.get('/api/voice-diagnostic/prompts/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(
+            data['pronunciation']['target_sentence'],
+            'I want to improve my English communication skills for work and daily conversations.',
+        )
+
+    @override_settings(USE_VOICE_DIAGNOSTIC=False, DEEPGRAM_API_KEY='')
+    def test_voice_diagnostic_tts_returns_safe_error_when_not_configured(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/tts/',
+            {
+                'text': 'I want to improve my English communication skills for work and daily conversations.',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertFalse(response.data['success'])
+        self.assertEqual(response.data['error'], 'TTS is not configured yet.')
+
+    @override_settings(USE_VOICE_DIAGNOSTIC=False, DEEPGRAM_API_KEY='', DEEPGRAM_STT_MODEL='nova-2')
+    def test_pronunciation_evaluate_returns_safe_error_when_stt_not_configured(self):
+        self.authenticate()
+        audio_file = SimpleUploadedFile(
+            'pronunciation.webm',
+            b'fake audio',
+            content_type='audio/webm',
+        )
+
+        response = self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate/',
+            {
+                'audio_file': audio_file,
+                'target_sentence': 'I want to improve my English communication skills for work and daily conversations.',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertFalse(response.data['success'])
+        self.assertEqual(response.data['error'], 'Speech-to-text is not configured yet.')
+
+    @patch('agents.voice_services.transcribe_audio')
+    def test_pronunciation_evaluate_scores_transcript_and_updates_mastery(self, mock_transcribe_audio):
+        self.authenticate()
+        mock_transcribe_audio.return_value = (
+            'I want to improve my English skills for work and daily conversations.'
+        )
+        audio_file = SimpleUploadedFile(
+            'pronunciation.webm',
+            b'fake audio',
+            content_type='audio/webm',
+        )
+
+        response = self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate/',
+            {
+                'audio_file': audio_file,
+                'target_sentence': 'I want to improve my English communication skills for work and daily conversations.',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['transcript'], mock_transcribe_audio.return_value)
+        self.assertEqual(data['score'], 92)
+        self.assertEqual(data['word_accuracy'], 92)
+        self.assertEqual(data['status'], 'Mastered')
+        self.assertEqual(data['missing_words'], ['communication'])
+        self.assertEqual(data['extra_words'], [])
+        mastery = SkillMastery.objects.get(
+            user=self.user,
+            skill__name='Pronunciation',
+        )
+        self.assertEqual(int(mastery.score), 92)
+        self.assertEqual(mastery.status, 'Mastered')
 
     def test_recommendation_and_dashboard_reuse_same_module(self):
         self.authenticate()
