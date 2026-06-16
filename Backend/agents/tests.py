@@ -446,7 +446,7 @@ class AgentMVPAPITests(APITestCase):
             self.assertNotEqual(item['corrected_answer'], item['answer'])
             self.assertTrue(item['mistakes'])
 
-    def test_voice_diagnostic_prompts_returns_pronunciation_target(self):
+    def test_voice_diagnostic_prompts_returns_voice_targets(self):
         self.authenticate()
 
         response = self.client.get('/api/voice-diagnostic/prompts/')
@@ -457,6 +457,15 @@ class AgentMVPAPITests(APITestCase):
             data['pronunciation']['target_sentence'],
             'I want to improve my English communication skills for work and daily conversations.',
         )
+        self.assertEqual(
+            data['listening']['passage'],
+            (
+                'Maria works in an office. Yesterday, she helped a customer solve a computer problem. '
+                'After work, she studied English for thirty minutes.'
+            ),
+        )
+        self.assertEqual(data['listening']['question'], 'What problem did Maria help solve?')
+        self.assertEqual(data['listening']['expected_answer'], 'A computer problem.')
 
     @override_settings(USE_VOICE_DIAGNOSTIC=False, DEEPGRAM_API_KEY='')
     def test_voice_diagnostic_tts_returns_safe_error_when_not_configured(self):
@@ -531,6 +540,83 @@ class AgentMVPAPITests(APITestCase):
         )
         self.assertEqual(int(mastery.score), 92)
         self.assertEqual(mastery.status, 'Mastered')
+
+    @patch('agents.voice_services.call_llm_json')
+    def test_listening_evaluate_uses_rule_based_fallback_and_updates_mastery(self, mock_call_llm_json):
+        self.authenticate()
+        mock_call_llm_json.return_value = None
+
+        response = self.client.post(
+            '/api/voice-diagnostic/listening/evaluate/',
+            {
+                'question': 'What problem did Maria help solve?',
+                'expected_answer': 'A computer problem.',
+                'user_answer': 'She helped solve a computer problem.',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['score'], 90)
+        self.assertEqual(data['status'], 'Mastered')
+        self.assertIn('Correct', data['feedback'])
+        mastery = SkillMastery.objects.get(
+            user=self.user,
+            skill__name='Listening',
+        )
+        self.assertEqual(int(mastery.score), 90)
+        self.assertEqual(mastery.status, 'Mastered')
+
+    @patch('agents.voice_services.call_llm_json')
+    def test_listening_evaluate_uses_llm_result_when_available(self, mock_call_llm_json):
+        self.authenticate()
+        mock_call_llm_json.return_value = {
+            'score': 75,
+            'feedback': 'You understood the main idea but missed some detail.',
+        }
+
+        response = self.client.post(
+            '/api/voice-diagnostic/listening/evaluate/',
+            {
+                'question': 'What problem did Maria help solve?',
+                'expected_answer': 'A computer problem.',
+                'user_answer': 'A customer problem.',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['score'], 75)
+        self.assertEqual(data['status'], 'Learning')
+        self.assertEqual(
+            data['feedback'],
+            'You understood the main idea but missed some detail.',
+        )
+        mastery = SkillMastery.objects.get(
+            user=self.user,
+            skill__name='Listening',
+        )
+        self.assertEqual(int(mastery.score), 75)
+        self.assertEqual(mastery.status, 'Learning')
+
+    def test_listening_evaluate_requires_user_answer(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/listening/evaluate/',
+            {
+                'question': 'What problem did Maria help solve?',
+                'expected_answer': 'A computer problem.',
+                'user_answer': '',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(response.data['success'])
+        self.assertEqual(response.data['error'], 'user_answer must be a non-empty string.')
 
     def test_recommendation_and_dashboard_reuse_same_module(self):
         self.authenticate()

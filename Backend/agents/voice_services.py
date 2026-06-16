@@ -9,10 +9,18 @@ from django.db import transaction
 
 from learning.models import Skill, SkillMastery
 
+from .llm_client import call_llm_json
+
 
 PRONUNCIATION_TARGET_SENTENCE = (
     'I want to improve my English communication skills for work and daily conversations.'
 )
+LISTENING_PASSAGE = (
+    'Maria works in an office. Yesterday, she helped a customer solve a computer problem. '
+    'After work, she studied English for thirty minutes.'
+)
+LISTENING_QUESTION = 'What problem did Maria help solve?'
+LISTENING_EXPECTED_ANSWER = 'A computer problem.'
 
 
 class VoiceDiagnosticError(Exception):
@@ -27,6 +35,11 @@ def get_voice_diagnostic_prompts():
     return {
         'pronunciation': {
             'target_sentence': PRONUNCIATION_TARGET_SENTENCE,
+        },
+        'listening': {
+            'passage': LISTENING_PASSAGE,
+            'question': LISTENING_QUESTION,
+            'expected_answer': LISTENING_EXPECTED_ANSWER,
         },
     }
 
@@ -161,6 +174,56 @@ def compare_pronunciation(target_sentence, transcript):
     }
 
 
+def _normalize_score(raw_score):
+    if not isinstance(raw_score, (int, float)):
+        return None
+    return max(0, min(100, round(raw_score)))
+
+
+def _evaluate_listening_with_llm(question, expected_answer, user_answer):
+    system_prompt = (
+        'You are an English listening comprehension evaluator. Return only JSON '
+        'with score and feedback. Score from 0 to 100 based on whether the '
+        'learner answered the comprehension question correctly from the heard '
+        'audio passage. Be concise and honest.'
+    )
+    user_prompt = (
+        f'Question: {question}\n'
+        f'Expected answer: {expected_answer}\n'
+        f'Learner answer: {user_answer}'
+    )
+    payload = call_llm_json(system_prompt, user_prompt)
+    if not isinstance(payload, dict):
+        return None
+
+    score = _normalize_score(payload.get('score'))
+    feedback = payload.get('feedback')
+    if score is None or not isinstance(feedback, str) or not feedback.strip():
+        return None
+    return score, feedback.strip()
+
+
+def _evaluate_listening_rule_based(expected_answer, user_answer):
+    expected_words = {
+        word
+        for word in _words(expected_answer)
+        if word not in {'a', 'an', 'the'}
+    }
+    user_words = set(_words(user_answer))
+    if not expected_words:
+        raise VoiceDiagnosticError('expected_answer must be a non-empty string.')
+
+    matched_words = expected_words & user_words
+    accuracy = len(matched_words) / len(expected_words)
+    if accuracy >= 1:
+        return 90, 'Correct. You understood the key detail from the audio passage.'
+    if accuracy >= 0.5:
+        return 70, 'Partly correct. You understood part of the key detail, but the answer needs to be more specific.'
+    if user_words:
+        return 40, 'Not quite. Listen again and focus on the key detail in the question.'
+    return 0, 'No answer was provided. Listen again and answer the comprehension question.'
+
+
 def _status_for_score(score):
     if score < 60:
         return 'Needs Review'
@@ -212,4 +275,51 @@ def evaluate_pronunciation(user, audio_file, target_sentence):
         'missing_words': comparison['missing_words'],
         'extra_words': comparison['extra_words'],
         'substituted_words': comparison['substituted_words'],
+    }
+
+
+@transaction.atomic
+def evaluate_listening(user, question, expected_answer, user_answer):
+    question = (question or '').strip()
+    expected_answer = (expected_answer or '').strip()
+    user_answer = (user_answer or '').strip()
+    if not question:
+        raise VoiceDiagnosticError('question must be a non-empty string.')
+    if not expected_answer:
+        raise VoiceDiagnosticError('expected_answer must be a non-empty string.')
+    if not user_answer:
+        raise VoiceDiagnosticError('user_answer must be a non-empty string.')
+
+    llm_result = _evaluate_listening_with_llm(
+        question,
+        expected_answer,
+        user_answer,
+    )
+    if llm_result is None:
+        score, feedback = _evaluate_listening_rule_based(
+            expected_answer,
+            user_answer,
+        )
+    else:
+        score, feedback = llm_result
+
+    status = _status_for_score(score)
+    skill, _ = Skill.objects.get_or_create(name='Listening')
+    SkillMastery.objects.update_or_create(
+        user=user,
+        skill=skill,
+        defaults={
+            'level_code': _level_for_score(score),
+            'score': Decimal(score),
+            'status': status,
+        },
+    )
+
+    return {
+        'score': score,
+        'status': status,
+        'feedback': feedback,
+        'question': question,
+        'expected_answer': expected_answer,
+        'user_answer': user_answer,
     }

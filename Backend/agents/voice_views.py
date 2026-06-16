@@ -9,6 +9,7 @@ from xiavlearn.api import success_response
 from .voice_services import (
     VoiceDiagnosticConfigError,
     VoiceDiagnosticError,
+    evaluate_listening,
     evaluate_pronunciation,
     get_voice_diagnostic_prompts,
     synthesize_tts,
@@ -79,4 +80,34 @@ class PronunciationEvaluateView(APIView):
         return success_response(
             result,
             'Pronunciation diagnostic evaluation completed.',
+        )
+
+
+class ListeningEvaluateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        question = request.data.get('question')
+        expected_answer = request.data.get('expected_answer')
+        user_answer = request.data.get('user_answer')
+        if not isinstance(question, str) or not question.strip():
+            return _error_response('question must be a non-empty string.')
+        if not isinstance(expected_answer, str) or not expected_answer.strip():
+            return _error_response('expected_answer must be a non-empty string.')
+        if not isinstance(user_answer, str) or not user_answer.strip():
+            return _error_response('user_answer must be a non-empty string.')
+
+        try:
+            result = evaluate_listening(
+                request.user,
+                question,
+                expected_answer,
+                user_answer,
+            )
+        except VoiceDiagnosticError as exc:
+            return _error_response(str(exc))
+
+        return success_response(
+            result,
+            'Listening diagnostic evaluation completed.',
         )

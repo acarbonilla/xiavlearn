@@ -120,6 +120,11 @@ export type VoiceDiagnosticPrompts = {
   pronunciation: {
     target_sentence: string;
   };
+  listening: {
+    passage: string;
+    question: string;
+    expected_answer: string;
+  };
 };
 
 export type PronunciationResult = {
@@ -135,6 +140,15 @@ export type PronunciationResult = {
     expected: string;
     heard: string;
   }>;
+};
+
+export type ListeningResult = {
+  score: number;
+  status: string;
+  feedback: string;
+  question: string;
+  expected_answer: string;
+  user_answer: string;
 };
 
 type ApiEnvelope<T> = {
@@ -355,5 +369,20 @@ export function evaluatePronunciation(audioBlob: Blob, targetSentence: string) {
   return request<PronunciationResult>("/api/voice-diagnostic/pronunciation/evaluate/", {
     method: "POST",
     body: formData,
+  });
+}
+
+export function evaluateListening(
+  question: string,
+  expectedAnswer: string,
+  userAnswer: string,
+) {
+  return request<ListeningResult>("/api/voice-diagnostic/listening/evaluate/", {
+    method: "POST",
+    body: JSON.stringify({
+      question,
+      expected_answer: expectedAnswer,
+      user_answer: userAnswer,
+    }),
   });
 }
