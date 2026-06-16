@@ -9,6 +9,13 @@ import {
   getRecommendation,
 } from "@/lib/api";
 
+const scoreRows = [
+  "Vocabulary",
+  "Grammar",
+  "Listening",
+  "Speaking",
+] as const;
+
 export default function RecommendationPage() {
   const [recommendation, setRecommendation] =
     useState<RecommendationData | null>(null);
@@ -44,6 +51,42 @@ export default function RecommendationPage() {
               <p className="mt-4 leading-7 text-[#60708a]">
                 {recommendation.reason}
               </p>
+              <section className="mt-6 rounded-2xl border border-[#dce4ef] bg-[#f8fafc] p-5">
+                <h3 className="text-lg font-black text-[#14213d]">
+                  Your Assessment Results
+                </h3>
+                <div className="mt-4 grid gap-3">
+                  {scoreRows.map((skill) => (
+                    <div
+                      className="flex items-center justify-between gap-4 border-b border-[#dce4ef] pb-3 last:border-b-0 last:pb-0"
+                      key={skill}
+                    >
+                      <span className="font-semibold text-[#42536b]">
+                        {skill} Score
+                      </span>
+                      <span className="font-black text-[#14213d]">
+                        {recommendation.diagnostic_scores[skill] ?? "Not assessed"}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between gap-4 pt-1">
+                    <span className="font-semibold text-[#42536b]">
+                      Weakest Skill
+                    </span>
+                    <span className="font-black text-[#14213d]">
+                      {recommendation.weakest_skill ?? "Not available"}
+                    </span>
+                  </div>
+                </div>
+              </section>
+              <section className="mt-6">
+                <h3 className="text-lg font-black text-[#14213d]">
+                  Why this lesson?
+                </h3>
+                <p className="mt-2 leading-7 text-[#60708a]">
+                  {recommendation.reason}
+                </p>
+              </section>
               <Button
                 className="mt-6"
                 href={`/lesson/${recommendation.recommended_module.id}`}

@@ -689,6 +689,18 @@ class AgentMVPAPITests(APITestCase):
         )
         SkillMastery.objects.create(
             user=self.user,
+            skill=self.skills['Vocabulary'],
+            level_code='A2',
+            score=62,
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Listening'],
+            level_code='A2',
+            score=58,
+        )
+        SkillMastery.objects.create(
+            user=self.user,
             skill=self.skills['Speaking'],
             level_code='A2',
             score=75,
@@ -708,6 +720,16 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(
             dashboard_data['recommended_module'],
             recommendation_data['recommended_module'],
+        )
+        self.assertEqual(recommendation_data['weakest_skill'], 'Grammar')
+        self.assertEqual(
+            recommendation_data['diagnostic_scores'],
+            {
+                'Vocabulary': 62,
+                'Grammar': 45,
+                'Listening': 58,
+                'Speaking': 75,
+            },
         )
 
     def test_teacher_session_and_feedback_persist_progress(self):

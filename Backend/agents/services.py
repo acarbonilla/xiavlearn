@@ -1102,9 +1102,22 @@ def get_curriculum_recommendation(user):
     else:
         reason = 'Start with a module at your current level.'
 
+    score_lookup = {
+        mastery.skill.name: int(mastery.score)
+        for mastery in masteries
+    }
+    diagnostic_scores = {
+        'Vocabulary': score_lookup.get('Vocabulary'),
+        'Grammar': score_lookup.get('Grammar'),
+        'Listening': score_lookup.get('Listening'),
+        'Speaking': score_lookup.get('Speaking'),
+    }
+
     return {
         'recommended_module': _serialize_module(module),
         'reason': reason,
+        'diagnostic_scores': diagnostic_scores,
+        'weakest_skill': weakest.skill.name if weakest else None,
     }
 
 

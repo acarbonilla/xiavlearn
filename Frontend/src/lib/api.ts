@@ -86,6 +86,13 @@ export type DiagnosticResult = {
 export type RecommendationData = {
   recommended_module: ModuleSummary | null;
   reason: string;
+  diagnostic_scores: {
+    Vocabulary: number | null;
+    Grammar: number | null;
+    Listening: number | null;
+    Speaking: number | null;
+  };
+  weakest_skill: string | null;
 };
 
 export type TeacherSession = {
