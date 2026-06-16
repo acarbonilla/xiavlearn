@@ -125,6 +125,9 @@ export type VoiceDiagnosticPrompts = {
     question: string;
     expected_answer: string;
   };
+  speaking: {
+    question: string;
+  };
 };
 
 export type PronunciationResult = {
@@ -149,6 +152,16 @@ export type ListeningResult = {
   question: string;
   expected_answer: string;
   user_answer: string;
+};
+
+export type SpeakingResult = {
+  question: string;
+  transcript: string;
+  score: number;
+  status: string;
+  feedback: string;
+  strengths: string[];
+  improvement_areas: string[];
 };
 
 type ApiEnvelope<T> = {
@@ -384,5 +397,16 @@ export function evaluateListening(
       expected_answer: expectedAnswer,
       user_answer: userAnswer,
     }),
+  });
+}
+
+export function evaluateSpeaking(audioBlob: Blob, question: string) {
+  const formData = new FormData();
+  formData.append("audio_file", audioBlob, "speaking.webm");
+  formData.append("question", question);
+
+  return request<SpeakingResult>("/api/voice-diagnostic/speaking/evaluate/", {
+    method: "POST",
+    body: formData,
   });
 }

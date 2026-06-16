@@ -21,6 +21,7 @@ LISTENING_PASSAGE = (
 )
 LISTENING_QUESTION = 'What problem did Maria help solve?'
 LISTENING_EXPECTED_ANSWER = 'A computer problem.'
+SPEAKING_QUESTION = 'Tell me about yourself and why you want to improve your English.'
 
 
 class VoiceDiagnosticError(Exception):
@@ -40,6 +41,9 @@ def get_voice_diagnostic_prompts():
             'passage': LISTENING_PASSAGE,
             'question': LISTENING_QUESTION,
             'expected_answer': LISTENING_EXPECTED_ANSWER,
+        },
+        'speaking': {
+            'question': SPEAKING_QUESTION,
         },
     }
 
@@ -224,6 +228,54 @@ def _evaluate_listening_rule_based(expected_answer, user_answer):
     return 0, 'No answer was provided. Listen again and answer the comprehension question.'
 
 
+def _evaluate_speaking_transcript(question, transcript):
+    words = _words(transcript)
+    unique_words = set(words)
+    word_count = len(words)
+    relevance_terms = {'english', 'improve', 'work', 'communication', 'speak', 'speaking', 'learn', 'learning'}
+    relevant_count = len(unique_words & relevance_terms)
+
+    score = 35
+    score += min(word_count * 3, 30)
+    score += min(relevant_count * 8, 24)
+    if re.search(r"\b(i am|i'm|my name is)\b", transcript, flags=re.IGNORECASE):
+        score += 8
+    if re.search(r'\b(because|so|and|to)\b', transcript, flags=re.IGNORECASE):
+        score += 6
+    score = max(0, min(100, round(score)))
+
+    strengths = []
+    improvement_areas = []
+    if word_count >= 10:
+        strengths.append('You gave a complete spoken answer.')
+    else:
+        improvement_areas.append('Add more detail so your answer feels complete.')
+
+    if relevant_count:
+        strengths.append('Your answer connected to the English improvement question.')
+    else:
+        improvement_areas.append('Explain why you want to improve your English.')
+
+    if score >= 80:
+        feedback = 'Your speaking answer was clear, relevant, and complete.'
+    elif score >= 60:
+        feedback = 'Your speaking answer was understandable, but it needs more detail and smoother sentence structure.'
+    else:
+        feedback = 'Your speaking answer needs clearer sentence structure and more relevant detail.'
+
+    if not strengths:
+        strengths.append('You completed the speaking attempt.')
+    if not improvement_areas:
+        improvement_areas.append('Keep practicing for smoother fluency and more natural detail.')
+
+    return {
+        'score': score,
+        'feedback': feedback,
+        'strengths': strengths,
+        'improvement_areas': improvement_areas,
+    }
+
+
 def _status_for_score(score):
     if score < 60:
         return 'Needs Review'
@@ -322,4 +374,38 @@ def evaluate_listening(user, question, expected_answer, user_answer):
         'question': question,
         'expected_answer': expected_answer,
         'user_answer': user_answer,
+    }
+
+
+@transaction.atomic
+def evaluate_speaking(user, audio_file, question):
+    question = (question or '').strip()
+    if not question:
+        raise VoiceDiagnosticError('question must be a non-empty string.')
+    if audio_file is None:
+        raise VoiceDiagnosticError('audio_file is required.')
+
+    transcript = transcribe_audio(audio_file)
+    evaluation = _evaluate_speaking_transcript(question, transcript)
+    score = evaluation['score']
+    status = _status_for_score(score)
+    skill, _ = Skill.objects.get_or_create(name='Speaking')
+    SkillMastery.objects.update_or_create(
+        user=user,
+        skill=skill,
+        defaults={
+            'level_code': _level_for_score(score),
+            'score': Decimal(score),
+            'status': status,
+        },
+    )
+
+    return {
+        'question': question,
+        'transcript': transcript,
+        'score': score,
+        'status': status,
+        'feedback': evaluation['feedback'],
+        'strengths': evaluation['strengths'],
+        'improvement_areas': evaluation['improvement_areas'],
     }

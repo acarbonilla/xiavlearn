@@ -11,6 +11,7 @@ from .voice_services import (
     VoiceDiagnosticError,
     evaluate_listening,
     evaluate_pronunciation,
+    evaluate_speaking,
     get_voice_diagnostic_prompts,
     synthesize_tts,
 )
@@ -110,4 +111,33 @@ class ListeningEvaluateView(APIView):
         return success_response(
             result,
             'Listening diagnostic evaluation completed.',
+        )
+
+
+class SpeakingEvaluateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        audio_file = request.FILES.get('audio_file')
+        question = request.data.get('question')
+        if audio_file is None:
+            return _error_response('audio_file is required.')
+        if not isinstance(question, str) or not question.strip():
+            return _error_response('question must be a non-empty string.')
+
+        try:
+            result = evaluate_speaking(
+                request.user,
+                audio_file,
+                question,
+            )
+        except VoiceDiagnosticConfigError as exc:
+            return _error_response(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        except VoiceDiagnosticError as exc:
+            return _error_response(str(exc))
+
+        return success_response(
+            result,
+            'Speaking diagnostic evaluation completed.',
         )

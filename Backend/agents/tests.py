@@ -466,6 +466,10 @@ class AgentMVPAPITests(APITestCase):
         )
         self.assertEqual(data['listening']['question'], 'What problem did Maria help solve?')
         self.assertEqual(data['listening']['expected_answer'], 'A computer problem.')
+        self.assertEqual(
+            data['speaking']['question'],
+            'Tell me about yourself and why you want to improve your English.',
+        )
 
     @override_settings(USE_VOICE_DIAGNOSTIC=False, DEEPGRAM_API_KEY='')
     def test_voice_diagnostic_tts_returns_safe_error_when_not_configured(self):
@@ -497,6 +501,28 @@ class AgentMVPAPITests(APITestCase):
             {
                 'audio_file': audio_file,
                 'target_sentence': 'I want to improve my English communication skills for work and daily conversations.',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertFalse(response.data['success'])
+        self.assertEqual(response.data['error'], 'Speech-to-text is not configured yet.')
+
+    @override_settings(USE_VOICE_DIAGNOSTIC=False, DEEPGRAM_API_KEY='', DEEPGRAM_STT_MODEL='nova-2')
+    def test_speaking_evaluate_returns_safe_error_when_stt_not_configured(self):
+        self.authenticate()
+        audio_file = SimpleUploadedFile(
+            'speaking.webm',
+            b'fake audio',
+            content_type='audio/webm',
+        )
+
+        response = self.client.post(
+            '/api/voice-diagnostic/speaking/evaluate/',
+            {
+                'audio_file': audio_file,
+                'question': 'Tell me about yourself and why you want to improve your English.',
             },
             format='multipart',
         )
@@ -539,6 +565,40 @@ class AgentMVPAPITests(APITestCase):
             skill__name='Pronunciation',
         )
         self.assertEqual(int(mastery.score), 92)
+        self.assertEqual(mastery.status, 'Mastered')
+
+    @patch('agents.voice_services.transcribe_audio')
+    def test_speaking_evaluate_scores_transcript_and_updates_mastery(self, mock_transcribe_audio):
+        self.authenticate()
+        mock_transcribe_audio.return_value = (
+            'My name is Ana and I want to improve my English communication for work.'
+        )
+        audio_file = SimpleUploadedFile(
+            'speaking.webm',
+            b'fake audio',
+            content_type='audio/webm',
+        )
+
+        response = self.client.post(
+            '/api/voice-diagnostic/speaking/evaluate/',
+            {
+                'audio_file': audio_file,
+                'question': 'Tell me about yourself and why you want to improve your English.',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['transcript'], mock_transcribe_audio.return_value)
+        self.assertGreaterEqual(data['score'], 80)
+        self.assertEqual(data['status'], 'Mastered')
+        self.assertTrue(data['strengths'])
+        self.assertTrue(data['improvement_areas'])
+        mastery = SkillMastery.objects.get(
+            user=self.user,
+            skill__name='Speaking',
+        )
         self.assertEqual(mastery.status, 'Mastered')
 
     @patch('agents.voice_services.call_llm_json')

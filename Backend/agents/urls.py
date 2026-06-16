@@ -11,6 +11,7 @@ from .views import (
 from .voice_views import (
     ListeningEvaluateView,
     PronunciationEvaluateView,
+    SpeakingEvaluateView,
     VoiceDiagnosticPromptsView,
     VoiceDiagnosticTTSView,
 )
@@ -66,5 +67,10 @@ urlpatterns = [
         'voice-diagnostic/listening/evaluate/',
         ListeningEvaluateView.as_view(),
         name='voice-diagnostic-listening-evaluate',
+    ),
+    path(
+        'voice-diagnostic/speaking/evaluate/',
+        SpeakingEvaluateView.as_view(),
+        name='voice-diagnostic-speaking-evaluate',
     ),
 ]

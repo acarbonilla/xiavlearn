@@ -7,10 +7,12 @@ import Card from "@/components/Card";
 import {
   evaluateListening,
   evaluatePronunciation,
+  evaluateSpeaking,
   getVoiceDiagnosticPrompts,
   requestTTS,
   type ListeningResult,
   type PronunciationResult,
+  type SpeakingResult,
 } from "@/lib/api";
 
 type RecorderState = "idle" | "recording" | "recorded";
@@ -23,19 +25,27 @@ type ListeningPrompt = {
 export default function VoiceDiagnosticPage() {
   const [targetSentence, setTargetSentence] = useState("");
   const [listeningPrompt, setListeningPrompt] = useState<ListeningPrompt | null>(null);
+  const [speakingQuestion, setSpeakingQuestion] = useState("");
   const [listeningAnswer, setListeningAnswer] = useState("");
   const [recorderState, setRecorderState] = useState<RecorderState>("idle");
+  const [speakingRecorderState, setSpeakingRecorderState] = useState<RecorderState>("idle");
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [speakingAudioBlob, setSpeakingAudioBlob] = useState<Blob | null>(null);
   const [pronunciationResult, setPronunciationResult] = useState<PronunciationResult | null>(null);
   const [listeningResult, setListeningResult] = useState<ListeningResult | null>(null);
+  const [speakingResult, setSpeakingResult] = useState<SpeakingResult | null>(null);
   const [error, setError] = useState("");
   const [loadingPrompt, setLoadingPrompt] = useState(true);
-  const [playingAudio, setPlayingAudio] = useState<"pronunciation" | "listening" | null>(null);
+  const [playingAudio, setPlayingAudio] = useState<"pronunciation" | "listening" | "speaking" | null>(null);
   const [submittingPronunciation, setSubmittingPronunciation] = useState(false);
   const [submittingListening, setSubmittingListening] = useState(false);
+  const [submittingSpeaking, setSubmittingSpeaking] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const speakingMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const speakingStreamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const speakingChunksRef = useRef<BlobPart[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -44,6 +54,7 @@ export default function VoiceDiagnosticPage() {
         if (active) {
           setTargetSentence(data.pronunciation.target_sentence);
           setListeningPrompt(data.listening);
+          setSpeakingQuestion(data.speaking.question);
         }
       })
       .catch((err: unknown) => {
@@ -60,6 +71,7 @@ export default function VoiceDiagnosticPage() {
     return () => {
       active = false;
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      speakingStreamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
 
@@ -90,6 +102,25 @@ export default function VoiceDiagnosticPage() {
     setPlayingAudio("listening");
     try {
       const audio = await requestTTS(listeningPrompt.passage);
+      const audioUrl = URL.createObjectURL(audio);
+      const player = new Audio(audioUrl);
+      player.onended = () => URL.revokeObjectURL(audioUrl);
+      await player.play();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "TTS is not configured yet.");
+    } finally {
+      setPlayingAudio(null);
+    }
+  }
+
+  async function playSpeakingQuestion() {
+    if (!speakingQuestion) {
+      return;
+    }
+    setError("");
+    setPlayingAudio("speaking");
+    try {
+      const audio = await requestTTS(speakingQuestion);
       const audioUrl = URL.createObjectURL(audio);
       const player = new Audio(audioUrl);
       player.onended = () => URL.revokeObjectURL(audioUrl);
@@ -145,6 +176,50 @@ export default function VoiceDiagnosticPage() {
     }
   }
 
+  async function startSpeakingRecording() {
+    if (!navigator.mediaDevices || typeof MediaRecorder === "undefined") {
+      setError("Voice recording is not supported in this browser.");
+      return;
+    }
+
+    setError("");
+    setSpeakingResult(null);
+    setSpeakingAudioBlob(null);
+    speakingChunksRef.current = [];
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      speakingStreamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          speakingChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        const recordedBlob = new Blob(speakingChunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+        setSpeakingAudioBlob(recordedBlob);
+        setSpeakingRecorderState("recorded");
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      speakingMediaRecorderRef.current = recorder;
+      recorder.start();
+      setSpeakingRecorderState("recording");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start recording.");
+      setSpeakingRecorderState("idle");
+    }
+  }
+
+  function stopSpeakingRecording() {
+    const recorder = speakingMediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+  }
+
   async function submitRecording() {
     if (!audioBlob || !targetSentence) {
       setError("Record your voice before submitting.");
@@ -189,12 +264,30 @@ export default function VoiceDiagnosticPage() {
     }
   }
 
+  async function submitSpeakingAnswer() {
+    if (!speakingAudioBlob || !speakingQuestion) {
+      setError("Record your speaking answer before submitting.");
+      return;
+    }
+
+    setError("");
+    setSubmittingSpeaking(true);
+    try {
+      const data = await evaluateSpeaking(speakingAudioBlob, speakingQuestion);
+      setSpeakingResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Speaking evaluation failed.");
+    } finally {
+      setSubmittingSpeaking(false);
+    }
+  }
+
   return (
     <main className="page-shell">
       <p className="eyebrow">Voice assessment</p>
       <h1 className="page-title">Voice Diagnostic</h1>
       <p className="page-copy">
-        Complete voice-based checks for pronunciation clarity and listening comprehension.
+        Complete voice-based checks for pronunciation clarity, listening comprehension, and spoken communication.
       </p>
 
       {error ? <div className="error-box">{error}</div> : null}
@@ -346,6 +439,94 @@ export default function VoiceDiagnosticPage() {
             <p className="mt-4 text-sm font-bold text-[#60708a]">
               Expected answer: {listeningResult.expected_answer}
             </p>
+          </Card>
+        </section>
+      ) : null}
+
+      <Card className="mt-8 max-w-4xl">
+        <div className="flex flex-col gap-5">
+          <div>
+            <p className="eyebrow">Speaking Test</p>
+            <h2 className="mt-2 text-2xl font-black text-[#14213d]">Question</h2>
+            <p className="mt-3 rounded-2xl border border-[#dce4ef] bg-[#f8fafc] p-4 text-lg leading-8 text-[#14213d]">
+              {loadingPrompt ? "Loading speaking question..." : speakingQuestion}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Button
+              disabled={!speakingQuestion || playingAudio === "speaking"}
+              onClick={playSpeakingQuestion}
+              type="button"
+            >
+              {playingAudio === "speaking" ? "Playing..." : "Play question"}
+            </Button>
+            <Button
+              disabled={speakingRecorderState === "recording"}
+              onClick={startSpeakingRecording}
+              type="button"
+              variant="secondary"
+            >
+              Start recording
+            </Button>
+            <Button
+              disabled={speakingRecorderState !== "recording"}
+              onClick={stopSpeakingRecording}
+              type="button"
+              variant="secondary"
+            >
+              Stop recording
+            </Button>
+            <Button
+              disabled={!speakingAudioBlob || submittingSpeaking}
+              onClick={submitSpeakingAnswer}
+              type="button"
+            >
+              {submittingSpeaking ? "Submitting..." : "Submit speaking answer"}
+            </Button>
+          </div>
+
+          <div className="note-box">
+            Recording status:{" "}
+            {speakingRecorderState === "recording"
+              ? "Recording"
+              : speakingRecorderState === "recorded"
+                ? "Recording ready"
+                : "Not started"}
+          </div>
+        </div>
+      </Card>
+
+      {speakingResult ? (
+        <section className="mt-8 grid gap-4 lg:grid-cols-[1fr_1fr]">
+          <Card>
+            <p className="eyebrow">Speaking score</p>
+            <h2 className="mt-2 text-2xl font-black text-[#14213d]">{speakingResult.score}%</h2>
+            <p className="mt-2 font-semibold text-[#60708a]">{speakingResult.status}</p>
+            <p className="mt-4 leading-7 text-[#42536b]">{speakingResult.feedback}</p>
+          </Card>
+
+          <Card>
+            <p className="eyebrow">Transcript</p>
+            <p className="mt-3 leading-7 text-[#14213d]">{speakingResult.transcript}</p>
+          </Card>
+
+          <Card>
+            <p className="eyebrow">Strengths</p>
+            <ul className="mt-3 grid gap-2 text-[#14213d]">
+              {speakingResult.strengths.map((strength) => (
+                <li key={strength}>{strength}</li>
+              ))}
+            </ul>
+          </Card>
+
+          <Card>
+            <p className="eyebrow">Improvement areas</p>
+            <ul className="mt-3 grid gap-2 text-[#14213d]">
+              {speakingResult.improvement_areas.map((area) => (
+                <li key={area}>{area}</li>
+              ))}
+            </ul>
           </Card>
         </section>
       ) : null}
