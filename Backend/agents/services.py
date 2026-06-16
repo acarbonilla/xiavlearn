@@ -56,19 +56,26 @@ GENERIC_FEEDBACK_PHRASES = (
     'good response',
     'good answer',
     'good work',
+    'already clear',
+    'already correct',
+    'already complete',
     'clear and understandable',
     'keep practicing',
     'nice work',
 )
+UNCLEAR_FEEDBACK = (
+    'Your answer is unclear and does not fully answer the question. '
+    'Review sentence structure and word choice.'
+)
 QUESTION_CORRECTIONS = {
     'introduce yourself in english.': (
-        'Hi, my name is [your name]. I live in this city, and I am learning English to improve my communication skills.'
+        'My name is Jane Doe. I live in this city. I am learning English to improve my communication skills.'
     ),
     'describe what you did yesterday.': (
-        'Yesterday, I worked on the same task we did before, and then I continued with the next activity.'
+        'Yesterday, I practiced English and worked on my tasks.'
     ),
     'what is your learning goal?': (
-        'My learning goal is to improve my English and communicate clearly and confidently.'
+        'My learning goal is to improve my English and communicate more clearly.'
     ),
 }
 COMMON_WORDS = {
@@ -282,13 +289,29 @@ def score_diagnostic_answers(answers):
 
 def _extract_intro_name(answer_text):
     name_patterns = [
-        r"\bmy name is\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})",
-        r"\b(?:i am|i'm)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})",
+        r"\bmy name is\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})(?=\s+(?:and|i|live|living)\b|[,.!?]|$)",
+        r"\b(?:i am|i'm)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})(?=\s+(?:live|living|from)\b|[,.!?]|$)",
     ]
     for pattern in name_patterns:
-        match = re.search(pattern, answer_text)
+        match = re.search(pattern, answer_text, flags=re.IGNORECASE)
         if match:
-            return match.group(1).strip()
+            candidate = match.group(1).strip()
+            if all(word[:1].isupper() for word in candidate.split()):
+                return candidate
+    return None
+
+
+def _extract_intro_place(answer_text):
+    place_patterns = [
+        r"\blive in\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,3})",
+        r"\bliving in\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,3})",
+    ]
+    for pattern in place_patterns:
+        match = re.search(pattern, answer_text, flags=re.IGNORECASE)
+        if match:
+            place = re.sub(r'\s+', ' ', match.group(1)).strip()
+            if place:
+                return place
     return None
 
 
@@ -298,33 +321,22 @@ def _default_corrected_answer(question, answer=''):
     lowered_answer = answer_text.lower()
 
     if question_key == 'introduce yourself in english.':
-        learner_name = _extract_intro_name(answer_text) or '[your name]'
-        intro_sentence = f'I am {learner_name}'
-        if 'live in' in lowered_answer or 'this city' in lowered_answer:
-            intro_sentence += ', and I live in this city'
-        intro_sentence += '.'
-
-        if 'tech support' in lowered_answer or 'company' in lowered_answer:
-            work_sentence = 'I currently work as an IT technical support specialist'
-            if 'company' in lowered_answer:
-                work_sentence += ' in a large international company'
-                if 'capital region' in lowered_answer:
-                    work_sentence += ' based in the capital region'
-            work_sentence += '.'
-            return f'{intro_sentence} {work_sentence}'
-
-        if learner_name != '[your name]':
-            return intro_sentence
+        learner_name = _extract_intro_name(answer_text) or 'Jane Doe'
+        place = _extract_intro_place(answer_text) or 'this city'
+        return (
+            f'My name is {learner_name}. I live in {place}. '
+            'I am learning English to improve my communication skills.'
+        )
 
     if question_key == 'describe what you did yesterday.':
-        if 'did before' in lowered_answer or 'same' in lowered_answer:
+        if any(phrase in lowered_answer for phrase in ('did before', 'same', 'continue', 'continued')):
             return (
-                'Yesterday, I worked on the same task we did before, and then I continued with the next activity.'
+                'Yesterday, I completed my work and continued practicing English.'
             )
+        return 'Yesterday, I practiced English and worked on my tasks.'
 
     if question_key == 'what is your learning goal?':
-        if 'goal' in lowered_answer:
-            return 'My learning goal is to improve my English and communicate more clearly.'
+        return 'My learning goal is to improve my English and communicate more clearly.'
 
     return QUESTION_CORRECTIONS.get(
         question_key,
@@ -367,6 +379,33 @@ def _find_suspicious_words(words):
     return suspicious
 
 
+def _has_obvious_unclear_pattern(question_lower, answer_text, lower_words):
+    if re.search(
+        r"\b(i did was|goal is the gola|were are|please be me why not|me i am|did i do not will|do not will be|me goal)\b",
+        answer_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+
+    if 'introduce yourself' in question_lower:
+        if lower_words[:2] == ['me', 'i']:
+            return True
+        if lower_words[:1] == ['me'] and _extract_intro_name(answer_text) is None:
+            return True
+
+    if 'describe what you did yesterday' in question_lower:
+        if re.search(r'\b(do not will|did i do not will|will be oyourss)\b', answer_text, flags=re.IGNORECASE):
+            return True
+
+    if 'learning goal' in question_lower:
+        if lower_words[:2] == ['me', 'goal']:
+            return True
+        if lower_words.count('goal') >= 2 and 'my learning goal is' not in answer_text.lower():
+            return True
+
+    return False
+
+
 def _feedback_indicates_changes(feedback):
     return bool(
         re.search(
@@ -379,6 +418,11 @@ def _feedback_indicates_changes(feedback):
 def _feedback_is_generic_or_misleading(feedback, has_issues):
     lowered_feedback = feedback.lower()
     if has_issues and any(phrase in lowered_feedback for phrase in GENERIC_FEEDBACK_PHRASES):
+        return True
+    if has_issues and re.search(
+        r'\balready\b.*\b(clear|correct|complete)\b',
+        lowered_feedback,
+    ):
         return True
     if has_issues and not re.search(
         r'\b(grammar|spelling|vocabulary|sentence|clarity|unclear|past tense|word choice|natural|meaning)\b',
@@ -394,6 +438,12 @@ def _clean_rewritten_sentence(text):
     if cleaned and cleaned[-1] not in '.!?':
         cleaned = f'{cleaned}.'
     return cleaned
+
+
+def _replacement_pattern(original):
+    if re.fullmatch(r"[A-Za-z']+", original):
+        return rf"\b{re.escape(original)}\b"
+    return re.escape(original)
 
 
 def _build_corrected_answer(question, answer, mistakes, is_unclear):
@@ -413,7 +463,7 @@ def _build_corrected_answer(question, answer, mistakes, is_unclear):
     replacements.sort(key=lambda item: len(item[0]), reverse=True)
     for original, correction in replacements:
         corrected_answer = re.sub(
-            re.escape(original),
+            _replacement_pattern(original),
             correction,
             corrected_answer,
             flags=re.IGNORECASE,
@@ -559,18 +609,19 @@ def _analyze_answer_feedback(question, answer):
                 'Check the spelling so your meaning is easier to understand.',
             )
 
-    obvious_clarity_break = bool(
-        re.search(
-            r"\b(i did was|goal is the gola|were are|please be me why not)\b",
-            answer_text,
-            flags=re.IGNORECASE,
-        )
+    obvious_clarity_break = _has_obvious_unclear_pattern(
+        question_lower,
+        answer_text,
+        lower_words,
     )
     word_count = len(words)
     unclear_ratio = len(suspicious_words) / max(word_count, 1)
     has_sentence_structure = _has_sentence_structure(words)
     is_unclear = (
+        obvious_clarity_break
+        or
         unclear_ratio >= 0.28
+        or len(suspicious_words) >= 2
         or not has_sentence_structure
         or word_count < 4
         or lower_words.count('me') >= 2
@@ -599,10 +650,7 @@ def _analyze_answer_feedback(question, answer):
         )
 
     if is_unclear:
-        feedback = (
-            'Your answer uses some English words, but the meaning is unclear. '
-            'You need clearer complete sentences with more accurate grammar and word choice.'
-        )
+        feedback = UNCLEAR_FEEDBACK
     elif tense_issue and 'yesterday' in question_lower:
         feedback = (
             'Your answer gives the main idea, but you need past tense verbs to describe what happened yesterday correctly.'
@@ -637,6 +685,22 @@ def _fallback_feedback_item(question, answer):
         },
         analysis,
     )
+
+
+def _force_question_aware_feedback(item, fallback_item, analysis):
+    if not analysis['is_unclear']:
+        return item
+
+    corrected_matches_answer = _same_text(
+        item['corrected_answer'],
+        fallback_item['answer'],
+    )
+    if corrected_matches_answer or not item['mistakes']:
+        return fallback_item
+
+    normalized_item = dict(item)
+    normalized_item['feedback'] = UNCLEAR_FEEDBACK
+    return normalized_item
 
 
 def normalize_answer_feedback(raw_feedback, answers):
@@ -705,6 +769,13 @@ def normalize_answer_feedback(raw_feedback, answers):
             normalized_feedback.append(normalized_item)
             continue
 
+        if not normalized_item['mistakes'] and not _same_text(
+            normalized_item['corrected_answer'],
+            normalized_item['answer'],
+        ):
+            normalized_feedback.append(fallback_item)
+            continue
+
         if has_issues and not normalized_item['mistakes']:
             normalized_item['mistakes'] = fallback_item['mistakes']
 
@@ -715,7 +786,13 @@ def normalize_answer_feedback(raw_feedback, answers):
             normalized_feedback.append(fallback_item)
             continue
 
-        normalized_feedback.append(normalized_item)
+        normalized_feedback.append(
+            _force_question_aware_feedback(
+                normalized_item,
+                fallback_item,
+                analysis,
+            )
+        )
 
     return normalized_feedback
 

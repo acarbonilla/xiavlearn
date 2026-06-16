@@ -379,6 +379,71 @@ class AgentMVPAPITests(APITestCase):
         self.assertIn('learning goal', third_feedback['corrected_answer'].lower())
         self.assertIn('unclear', third_feedback['feedback'].lower())
 
+    @patch('agents.services.call_llm_json')
+    def test_diagnostic_normalizes_unclear_answers_into_question_aware_corrections(self, mock_call_llm_json):
+        self.authenticate()
+        answers = [
+            {
+                'question': 'Introduce yourself in English.',
+                'answer': 'Me I am with you , ohw with us.',
+            },
+            {
+                'question': 'Describe what you did yesterday.',
+                'answer': 'Did I do not will be oyourss.',
+            },
+            {
+                'question': 'What is your learning goal?',
+                'answer': 'Me goal to goal the goalingbowekng',
+            },
+        ]
+        mock_call_llm_json.return_value = {
+            'skill_scores': {'Grammar': 25, 'Vocabulary': 29},
+            'overall_level': 'A1',
+            'weak_skills': ['Grammar', 'Vocabulary'],
+            'recommendation': 'Focus on Grammar and Vocabulary.',
+            'level_explanation': 'Your level is A1 because the answers are limited and unclear.',
+            'answer_feedback': [
+                {
+                    'question': item['question'],
+                    'answer': item['answer'],
+                    'feedback': 'Your answer is already clear, correct, and complete for this question.',
+                    'corrected_answer': item['answer'],
+                    'mistakes': [],
+                }
+                for item in answers
+            ],
+            'next_step': 'Review your weak skills and start the recommended module.',
+        }
+
+        response = self.client.post(
+            '/api/diagnostic/evaluate/',
+            {'answers': answers},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+
+        first_feedback, second_feedback, third_feedback = data['answer_feedback']
+        self.assertEqual(
+            first_feedback['corrected_answer'],
+            'My name is Jane Doe. I live in this city. I am learning English to improve my communication skills.',
+        )
+        self.assertEqual(
+            second_feedback['corrected_answer'],
+            'Yesterday, I practiced English and worked on my tasks.',
+        )
+        self.assertEqual(
+            third_feedback['corrected_answer'],
+            'My learning goal is to improve my English and communicate more clearly.',
+        )
+
+        for item in data['answer_feedback']:
+            self.assertIn('unclear', item['feedback'].lower())
+            self.assertNotIn('already clear', item['feedback'].lower())
+            self.assertNotEqual(item['corrected_answer'], item['answer'])
+            self.assertTrue(item['mistakes'])
+
     def test_recommendation_and_dashboard_reuse_same_module(self):
         self.authenticate()
         LearnerProfile.objects.create(user=self.user, current_level='A2')
