@@ -811,6 +811,192 @@ class AgentMVPAPITests(APITestCase):
             recommendation_data['current_skill_scores'],
             recommendation_data['diagnostic_scores'],
         )
+        self.assertEqual(recommendation_data['learner_level'], 'A2')
+        self.assertEqual(recommendation_data['module_level'], 'A2')
+        self.assertFalse(recommendation_data['fallback_used'])
+        self.assertIsNone(recommendation_data['fallback_reason'])
+
+    def test_recommendation_prefers_exact_current_level_module_for_same_skill(self):
+        self.authenticate()
+        level_c1 = CurriculumLevel.objects.create(
+            level_code='C1',
+            name='Advanced',
+            sort_order=5,
+        )
+        c1_grammar_module = Module.objects.create(
+            level=level_c1,
+            skill=self.skills['Grammar'],
+            title='Advanced Grammar Patterns',
+            description='Practice advanced grammar patterns.',
+            objectives=['Use advanced grammar accurately'],
+            sort_order=1,
+        )
+        LearnerProfile.objects.create(user=self.user, current_level='C1')
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Grammar'],
+            level_code='C1',
+            score=41,
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Vocabulary'],
+            level_code='C1',
+            score=67,
+        )
+
+        response = self.client.get('/api/curriculum/recommendation/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['recommended_module']['id'], c1_grammar_module.id)
+        self.assertEqual(data['learner_level'], 'C1')
+        self.assertEqual(data['module_level'], 'C1')
+        self.assertFalse(data['fallback_used'])
+        self.assertIsNone(data['fallback_reason'])
+
+    def test_study_plan_reports_fallback_when_only_lower_level_skill_module_exists(self):
+        self.authenticate()
+        self.grammar_module.delete()
+        a1_grammar_module = Module.objects.create(
+            level=self.level_a1,
+            skill=self.skills['Grammar'],
+            title='Basic Grammar Review',
+            description='Review core grammar patterns.',
+            objectives=['Review simple sentence rules'],
+            sort_order=1,
+        )
+        level_c1 = CurriculumLevel.objects.create(
+            level_code='C1',
+            name='Advanced',
+            sort_order=5,
+        )
+        LearnerProfile.objects.create(user=self.user, current_level='C1')
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Grammar'],
+            level_code='C1',
+            score=38,
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Speaking'],
+            level_code='C1',
+            score=52,
+        )
+
+        response = self.client.post('/api/scheduler/generate-plan/', {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = self.assert_success_response(response)
+        first_item = data['plan']['items'][0]
+        self.assertEqual(first_item['skill'], 'Grammar')
+        self.assertEqual(first_item['learner_level'], 'C1')
+        self.assertEqual(first_item['module_level'], 'A1')
+        self.assertEqual(first_item['module_id'], a1_grammar_module.id)
+        self.assertTrue(first_item['fallback_used'])
+        self.assertIn('No C1 Grammar module is available yet', first_item['fallback_reason'])
+
+    def test_study_plan_prefers_exact_a2_vocabulary_module_for_focus_skill(self):
+        self.authenticate()
+        vocabulary_module = Module.objects.create(
+            level=self.level_a2,
+            skill=self.skills['Vocabulary'],
+            title='Daily Conversation',
+            description='Build practical conversation vocabulary.',
+            objectives=['Use daily conversation vocabulary'],
+            sort_order=1,
+        )
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Vocabulary'],
+            level_code='A2',
+            score=35,
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Grammar'],
+            level_code='A2',
+            score=50,
+        )
+
+        response = self.client.post('/api/scheduler/generate-plan/', {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = self.assert_success_response(response)
+        first_item = data['plan']['items'][0]
+        self.assertEqual(first_item['skill'], 'Vocabulary')
+        self.assertEqual(first_item['learner_level'], 'A2')
+        self.assertEqual(first_item['module_level'], 'A2')
+        self.assertEqual(first_item['module_id'], vocabulary_module.id)
+        self.assertFalse(first_item['fallback_used'])
+        self.assertIsNone(first_item['fallback_reason'])
+
+    @patch('agents.services.call_llm_json')
+    def test_complex_sentences_module_uses_objective_aligned_teacher_task(self, mock_call_llm_json):
+        self.authenticate()
+        mock_call_llm_json.return_value = None
+        level_b2 = CurriculumLevel.objects.create(
+            level_code='B2',
+            name='Upper Intermediate',
+            sort_order=4,
+        )
+        complex_module = Module.objects.create(
+            level=level_b2,
+            skill=self.skills['Grammar'],
+            title='Complex Sentences',
+            description='Practice writing compound and complex sentences clearly.',
+            objectives=['Use compound and complex sentences.'],
+            sort_order=1,
+        )
+
+        session_response = self.client.post(
+            '/api/teacher/session/start/',
+            {'module_id': complex_module.id},
+            format='json',
+        )
+
+        self.assertEqual(session_response.status_code, status.HTTP_201_CREATED)
+        session_data = self.assert_success_response(session_response)
+        self.assertEqual(
+            session_data['lesson_objective'],
+            'Use compound and complex sentences.',
+        )
+        task_text = session_data['current_task']['teacher_task'].lower()
+        self.assertNotIn('simple present tense', task_text)
+        self.assertTrue(
+            any(
+                phrase in task_text
+                for phrase in [
+                    'complex sentence',
+                    'although',
+                    'because',
+                    'while',
+                    'dependent clause',
+                ]
+            )
+        )
+
+        answer_response = self.client.post(
+            '/api/teacher/session/answer/',
+            {
+                'session_id': session_data['session_id'],
+                'student_answer': 'I work as a Technical Support Engineer.',
+            },
+            format='json',
+        )
+
+        self.assertEqual(answer_response.status_code, status.HTTP_200_OK)
+        answer_data = self.assert_success_response(answer_response)
+        self.assertIn(
+            'does not show a complex sentence',
+            answer_data['turn']['feedback'].lower(),
+        )
+        self.assertIn(
+            'objective match',
+            answer_data['turn']['explanation'].lower(),
+        )
 
     def test_guided_teacher_session_persists_turns_without_updating_mastery(self):
         self.authenticate()
@@ -937,7 +1123,7 @@ class AgentMVPAPITests(APITestCase):
             final_data = self.assert_success_response(response)
 
         self.assertTrue(final_data['completed'])
-        self.assertEqual(final_data['final_result']['session_score'], 62)
+        self.assertEqual(final_data['final_result']['session_score'], 65)
 
         mastery = SkillMastery.objects.get(user=self.user, skill=self.skills['Grammar'])
         profile = LearnerProfile.objects.get(user=self.user)
@@ -1048,9 +1234,13 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(len(plan_data['plan']['items']), 2)
         self.assertEqual(plan_data['plan']['items'][0]['day'], 'Day 1')
         self.assertEqual(plan_data['plan']['items'][0]['skill'], 'Grammar')
+        self.assertEqual(plan_data['plan']['items'][0]['learner_level'], 'A2')
         self.assertEqual(plan_data['plan']['items'][0]['level'], 'A2')
+        self.assertEqual(plan_data['plan']['items'][0]['module_level'], 'A2')
         self.assertEqual(plan_data['plan']['items'][0]['module_id'], self.grammar_module.id)
         self.assertEqual(plan_data['plan']['items'][0]['module_title'], self.grammar_module.title)
+        self.assertFalse(plan_data['plan']['items'][0]['fallback_used'])
+        self.assertIsNone(plan_data['plan']['items'][0]['fallback_reason'])
         self.assertEqual(
             plan_data['plan']['items'][0]['href'],
             f'/feedback?moduleId={self.grammar_module.id}',
@@ -1184,4 +1374,8 @@ class AgentMVPAPITests(APITestCase):
             LearnerProfile.objects.get(user=self.user).current_level,
             'B1',
         )
-        self.assertEqual(data['recommended_module']['id'], b1_grammar_module.id)
+        self.assertEqual(data['recommended_module']['id'], self.speaking_module.id)
+        self.assertEqual(data['learner_level'], 'B1')
+        self.assertEqual(data['module_level'], 'A2')
+        self.assertTrue(data['fallback_used'])
+        self.assertIn('No B1 Speaking module is available yet', data['fallback_reason'])

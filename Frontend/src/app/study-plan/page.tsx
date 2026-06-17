@@ -79,12 +79,26 @@ export default function StudyPlanPage() {
                         {item.day}
                       </p>
                       <span className="rounded-full bg-[#e9eeff] px-3 py-1 text-xs font-bold text-[#335cff]">
-                        {item.level ? `${item.level} - ${item.skill}` : item.skill}
+                        {item.fallback_used
+                          ? `${item.module_level ?? "No module"} Review - ${item.skill}`
+                          : item.module_level
+                            ? `${item.module_level} - ${item.skill}`
+                            : item.skill}
                       </span>
                     </div>
                     <h3 className="mt-3 text-lg font-bold text-[#14213d]">
                       {item.title}
                     </h3>
+                    {item.fallback_used && item.module_level ? (
+                      <p className="mt-2 rounded-xl border border-[#facc15] bg-[#fffbeb] px-3 py-2 text-sm leading-6 text-[#7c5e10]">
+                        {`No ${item.learner_level} module is available yet. Showing ${item.module_level} review lesson.`}
+                      </p>
+                    ) : null}
+                    {item.fallback_used && item.fallback_reason ? (
+                      <p className="mt-2 text-sm leading-6 text-[#7c5e10]">
+                        {item.fallback_reason}
+                      </p>
+                    ) : null}
                     <p className="mt-2 text-sm leading-6 text-[#60708a]">
                       {item.module_id
                         ? "Open this guided lesson and continue your weekly focus."

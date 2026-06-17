@@ -103,6 +103,10 @@ export type RecommendationData = {
     Speaking: number | null;
   };
   weakest_skill: string | null;
+  learner_level: string;
+  module_level: string | null;
+  fallback_used: boolean;
+  fallback_reason: string | null;
 };
 
 export type TeacherSession = {
@@ -149,6 +153,7 @@ export type GuidedTeacherSession = {
   study_session_id: number;
   module: ModuleSummary | null;
   lesson: string;
+  lesson_objective: string;
   status: string;
   current_turn: number;
   total_turns: number;
@@ -184,8 +189,12 @@ export type StudyPlanItem = {
   title: string;
   skill: string;
   level: string | null;
+  learner_level: string;
+  module_level: string | null;
   module_id: number | null;
   module_title: string | null;
+  fallback_used: boolean;
+  fallback_reason: string | null;
   href: string;
 };
 

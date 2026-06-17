@@ -144,6 +144,15 @@ export default function FeedbackPage() {
                     Task {session.current_turn} of {session.total_turns}
                   </span>
                 </div>
+                <p className="mt-4 text-sm font-bold uppercase tracking-wider text-[#60708a]">
+                  Lesson objective
+                </p>
+                <p className="mt-2 leading-7 text-[#42536b]">
+                  {session.lesson_objective}
+                </p>
+                <p className="mt-6 text-sm font-bold uppercase tracking-wider text-[#60708a]">
+                  Task
+                </p>
                 <p className="mt-4 leading-7 text-[#14213d]">
                   {session.current_task?.teacher_task}
                 </p>

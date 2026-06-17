@@ -85,9 +85,18 @@ export default function RecommendationPage() {
           {recommendation.recommended_module ? (
             <>
               <p className="text-sm font-bold uppercase tracking-wider text-[#335cff]">
-                {recommendation.recommended_module.level} Lesson {"\u2022"}{" "}
-                {recommendation.recommended_module.skill} Focus
+                {recommendation.fallback_used
+                  ? `${recommendation.recommended_module.level} Review - ${recommendation.recommended_module.skill}`
+                  : `${recommendation.learner_level} - ${recommendation.recommended_module.skill}`}
               </p>
+              {recommendation.fallback_used ? (
+                <div className="mt-4 rounded-2xl border border-[#facc15] bg-[#fffbeb] px-4 py-3 text-sm leading-6 text-[#7c5e10]">
+                  {`No ${recommendation.learner_level} module is available yet. Showing ${recommendation.module_level} review lesson.`}
+                  {recommendation.fallback_reason ? (
+                    <span className="block mt-1">{recommendation.fallback_reason}</span>
+                  ) : null}
+                </div>
+              ) : null}
               <h2 className="mt-3 text-3xl font-black">
                 {recommendation.recommended_module.title}
               </h2>

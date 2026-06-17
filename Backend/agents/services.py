@@ -1229,53 +1229,185 @@ def evaluate_diagnostic(user, answers):
     recalculate_learner_level(user)
     return diagnostic_result
 
+
+def _normalized_cefr_level(level_code, default='A1'):
+    normalized = _normalize_text(level_code)
+    if normalized is not None:
+        normalized = normalized.upper()
+    if normalized in CEFR_PROGRESSION_ORDER:
+        return normalized
+    return default
+
+
+def _module_selection_result(module, learner_level, fallback_used=False, fallback_reason=None):
+    return {
+        'module': module,
+        'learner_level': learner_level,
+        'module_level': module.level.level_code if module else None,
+        'fallback_used': fallback_used,
+        'fallback_reason': fallback_reason,
+    }
+
+
+def _select_module_for_skill(skill_name, learner_level):
+    learner_level = _normalized_cefr_level(learner_level)
+    active_modules = list(
+        Module.objects.filter(
+            is_active=True,
+            skill__name=skill_name,
+        )
+        .select_related('level', 'skill')
+        .order_by('level__sort_order', 'sort_order', 'id')
+    )
+    if not active_modules:
+        return _module_selection_result(
+            None,
+            learner_level,
+            fallback_used=True,
+            fallback_reason=(
+                f'No {learner_level} {skill_name} module is available yet, '
+                'so choose another recommended lesson instead.'
+            ),
+        )
+
+    modules_by_level = {}
+    for module in active_modules:
+        level_code = _normalized_cefr_level(module.level.level_code)
+        modules_by_level.setdefault(level_code, []).append(module)
+
+    if learner_level in modules_by_level:
+        return _module_selection_result(
+            modules_by_level[learner_level][0],
+            learner_level,
+        )
+
+    learner_index = CEFR_PROGRESSION_ORDER.index(learner_level)
+    lower_levels = list(reversed(CEFR_PROGRESSION_ORDER[:learner_index]))
+    for level_code in lower_levels:
+        if level_code in modules_by_level:
+            module = modules_by_level[level_code][0]
+            return _module_selection_result(
+                module,
+                learner_level,
+                fallback_used=True,
+                fallback_reason=(
+                    f'No {learner_level} {skill_name} module is available yet, '
+                    f'so an available {module.level.level_code} review module was selected.'
+                ),
+            )
+
+    def distance_from_learner(module):
+        module_level = _normalized_cefr_level(module.level.level_code)
+        module_index = CEFR_PROGRESSION_ORDER.index(module_level)
+        return (
+            abs(module_index - learner_index),
+            module_index,
+            module.sort_order,
+            module.id,
+        )
+
+    module = min(active_modules, key=distance_from_learner)
+    return _module_selection_result(
+        module,
+        learner_level,
+        fallback_used=True,
+        fallback_reason=(
+            f'No {learner_level} {skill_name} module is available yet, '
+            f'so an available {module.level.level_code} module was selected.'
+        ),
+    )
+
+
+def _select_default_module_for_level(learner_level):
+    learner_level = _normalized_cefr_level(learner_level)
+    active_modules = list(
+        Module.objects.filter(is_active=True)
+        .select_related('level', 'skill')
+        .order_by('level__sort_order', 'sort_order', 'id')
+    )
+    if not active_modules:
+        return _module_selection_result(
+            None,
+            learner_level,
+            fallback_used=True,
+            fallback_reason='No active modules are available yet.',
+        )
+
+    modules_by_level = {}
+    for module in active_modules:
+        level_code = _normalized_cefr_level(module.level.level_code)
+        modules_by_level.setdefault(level_code, []).append(module)
+
+    if learner_level in modules_by_level:
+        module = modules_by_level[learner_level][0]
+        return _module_selection_result(
+            module,
+            learner_level,
+            fallback_used=True,
+            fallback_reason=(
+                f'No {learner_level} lesson was available for the focus skill, '
+                f'so a {module.level.level_code} module was selected.'
+            ),
+        )
+
+    learner_index = CEFR_PROGRESSION_ORDER.index(learner_level)
+    lower_levels = list(reversed(CEFR_PROGRESSION_ORDER[:learner_index]))
+    for level_code in lower_levels:
+        if level_code in modules_by_level:
+            module = modules_by_level[level_code][0]
+            return _module_selection_result(
+                module,
+                learner_level,
+                fallback_used=True,
+                fallback_reason=(
+                    f'No {learner_level} lesson was available for the focus skill, '
+                    f'so a {module.level.level_code} review module was selected.'
+                ),
+            )
+
+    module = active_modules[0]
+    return _module_selection_result(
+        module,
+        learner_level,
+        fallback_used=True,
+        fallback_reason=(
+            f'No {learner_level} lesson was available for the focus skill, '
+            f'so an available {module.level.level_code} module was selected.'
+        ),
+    )
+
+
 def get_curriculum_recommendation(user):
-    profile, _ = LearnerProfile.objects.get_or_create(user=user)
     masteries = list(
         SkillMastery.objects.filter(user=user)
         .select_related('skill')
         .order_by('score', 'skill__name')
     )
-    level_code = profile.current_level or (
-        masteries[0].level_code if masteries else 'A1'
-    )
-    active_modules = Module.objects.filter(is_active=True).select_related(
-        'level', 'skill'
-    )
+    learner_level = _learner_level_for_user(user)
 
     weakest = masteries[0] if masteries else None
     recommended_mastery = weakest
-    module = None
+    module_selection = None
     for mastery in masteries:
-        module = active_modules.filter(
-            level__level_code=level_code,
-            skill=mastery.skill,
-        ).order_by('sort_order', 'id').first()
-        if module:
+        module_selection = _select_module_for_skill(
+            mastery.skill.name,
+            learner_level,
+        )
+        if module_selection['module'] is not None:
             recommended_mastery = mastery
             break
 
-    if module is None and weakest:
-        module = active_modules.filter(
-            skill=weakest.skill,
-        ).order_by('level__sort_order', 'sort_order', 'id').first()
+    if module_selection is None or module_selection['module'] is None:
+        module_selection = _select_default_module_for_level(learner_level)
 
-    if module is None:
-        module = active_modules.filter(
-            level__level_code=level_code,
-        ).order_by('sort_order', 'id').first()
-    if module is None:
-        module = active_modules.order_by(
-            'level__sort_order', 'sort_order', 'id'
-        ).first()
-
+    module = module_selection['module']
     if recommended_mastery and module:
         if recommended_mastery == weakest:
             reason = f'{weakest.skill.name} is your weakest skill.'
         else:
             reason = (
                 f'{recommended_mastery.skill.name} is your weakest skill '
-                f'with an active {level_code} module.'
+                f'with an active {learner_level} module.'
             )
     elif weakest:
         reason = f'{weakest.skill.name} is your weakest skill.'
@@ -1299,6 +1431,10 @@ def get_curriculum_recommendation(user):
         'diagnostic_scores': current_skill_scores,
         'current_skill_scores': current_skill_scores,
         'weakest_skill': weakest.skill.name if weakest else None,
+        'learner_level': module_selection['learner_level'],
+        'module_level': module_selection['module_level'],
+        'fallback_used': module_selection['fallback_used'],
+        'fallback_reason': module_selection['fallback_reason'],
     }
 
 
@@ -1327,40 +1463,32 @@ def _study_plan_focus_skills(user):
     return focus
 
 
+def _learner_level_for_user(user):
+    profile, _ = LearnerProfile.objects.get_or_create(user=user)
+    first_mastery = (
+        SkillMastery.objects.filter(user=user)
+        .order_by('score', 'skill__name')
+        .first()
+    )
+    return _normalized_cefr_level(
+        profile.current_level or (
+            first_mastery.level_code if first_mastery else 'A1'
+        )
+    )
+
+
 def _study_plan_module_for_skill(user, skill_name, preferred_level):
-    active_modules = Module.objects.filter(
-        is_active=True,
-        skill__name=skill_name,
-    ).select_related('level', 'skill')
-
-    if preferred_level:
-        module = active_modules.filter(
-            level__level_code=preferred_level,
-        ).order_by('sort_order', 'id').first()
-        if module:
-            return module
-
-    recommendation = get_curriculum_recommendation(user)
-    recommended_module = recommendation.get('recommended_module')
-    if (
-        recommended_module
-        and recommended_module.get('skill') == skill_name
-    ):
-        module = active_modules.filter(pk=recommended_module['id']).first()
-        if module:
-            return module
-
-    return active_modules.order_by('level__sort_order', 'sort_order', 'id').first()
+    return _select_module_for_skill(skill_name, preferred_level)
 
 
 def _build_study_plan_items(user, focus):
-    profile, _ = LearnerProfile.objects.get_or_create(user=user)
-    preferred_level = profile.current_level or None
+    preferred_level = _learner_level_for_user(user)
     items = []
     for index, skill_name in enumerate(focus, start=1):
-        module = _study_plan_module_for_skill(user, skill_name, preferred_level)
+        selection = _study_plan_module_for_skill(user, skill_name, preferred_level)
+        module = selection['module']
         module_title = module.title if module else None
-        level_code = module.level.level_code if module else preferred_level
+        module_level = selection['module_level']
         title = (
             f'{skill_name} - {module_title}'
             if module_title
@@ -1371,9 +1499,13 @@ def _build_study_plan_items(user, focus):
                 'day': f'Day {index}',
                 'title': title,
                 'skill': skill_name,
-                'level': level_code,
+                'level': module_level,
+                'learner_level': selection['learner_level'],
+                'module_level': module_level,
                 'module_id': module.id if module else None,
                 'module_title': module_title,
+                'fallback_used': selection['fallback_used'],
+                'fallback_reason': selection['fallback_reason'],
                 'href': f'/feedback?moduleId={module.id}' if module else '/recommendation',
             }
         )
@@ -1404,51 +1536,118 @@ def _teacher_lesson_text(module):
     ).strip()
 
 
+def _module_objectives(module):
+    objectives = module.objectives or []
+    if isinstance(objectives, list):
+        return [objective.strip() for objective in objectives if isinstance(objective, str) and objective.strip()]
+    return []
+
+
+def _module_objective_summary(module):
+    objectives = _module_objectives(module)
+    if objectives:
+        return objectives[0]
+    description = (module.description or '').strip()
+    if description:
+        return description
+    return f'Practice {module.skill.name.lower()} in this lesson.'
+
+
 def _module_focus_profile(module):
     title = (module.title or '').strip()
     title_lower = title.lower()
+    description_lower = (module.description or '').lower()
+    objective_summary = _module_objective_summary(module)
+    objective_text = ' '.join(_module_objectives(module)).lower()
+    focus_text = ' '.join(
+        part for part in [title_lower, description_lower, objective_text]
+        if part
+    )
     skill_name = module.skill.name
     skill_lower = skill_name.lower()
 
     if skill_lower == 'grammar':
+        if any(
+            phrase in focus_text
+            for phrase in [
+                'complex sentence',
+                'complex sentences',
+                'compound sentence',
+                'compound and complex',
+                'dependent clause',
+                'subordinate clause',
+            ]
+        ):
+            return {
+                'focus_label': 'complex sentences',
+                'lesson_objective': objective_summary,
+                'tasks': [
+                    {
+                        'teacher_task': 'Combine two simple sentences into one complex sentence using because, although, or while.',
+                        'reference_answer': 'Although I was tired, I finished my work.',
+                        'explanation': 'Combine ideas with a dependent clause and a conjunction such as although, because, or while.',
+                        'task_type': 'complex_sentence_conjunction',
+                    },
+                    {
+                        'teacher_task': 'Write one sentence using although, because, or while to show a complex sentence.',
+                        'reference_answer': 'Because I wanted to improve, I practiced English before work.',
+                        'explanation': 'A complex sentence includes a dependent clause linked with a conjunction.',
+                        'task_type': 'complex_sentence_conjunction',
+                    },
+                    {
+                        'teacher_task': 'Describe a situation using at least one dependent clause in a complex sentence.',
+                        'reference_answer': 'While I was solving a support ticket, I took notes for the next customer call.',
+                        'explanation': 'Use a complete sentence that includes a dependent clause to match the lesson objective.',
+                        'task_type': 'complex_sentence_clause',
+                    },
+                ],
+            }
         if 'past' in title_lower:
             return {
                 'focus_label': 'past tense',
+                'lesson_objective': objective_summary,
                 'tasks': [
                     {
                         'teacher_task': 'Write one sentence about something you did yesterday using the past tense.',
                         'reference_answer': 'Yesterday, I visited my friend.',
                         'explanation': 'Use a past tense verb to show the action already happened.',
+                        'task_type': 'past_tense_sentence',
                     },
                     {
                         'teacher_task': 'Correct this sentence: "She go to school yesterday."',
                         'reference_answer': 'She went to school yesterday.',
                         'explanation': 'Use the past tense form "went" for an action that happened yesterday.',
+                        'task_type': 'sentence_correction',
                     },
                     {
                         'teacher_task': 'Write one sentence about your last weekend using the past tense.',
                         'reference_answer': 'Last weekend, I watched a movie.',
                         'explanation': 'Use a complete sentence with a past tense verb.',
+                        'task_type': 'past_tense_sentence',
                     },
                 ],
             }
         return {
             'focus_label': 'simple present tense',
+            'lesson_objective': objective_summary,
             'tasks': [
                 {
                     'teacher_task': 'Create one sentence using the simple present tense.',
                     'reference_answer': 'I study English every evening.',
                     'explanation': 'Use the simple present to describe habits or routines.',
+                    'task_type': 'simple_present_sentence',
                 },
                 {
                     'teacher_task': 'Correct this sentence: "She go to school every day."',
                     'reference_answer': 'She goes to school every day.',
                     'explanation': 'For he, she, and it, add -s or -es to the verb in the simple present tense.',
+                    'task_type': 'sentence_correction',
                 },
                 {
                     'teacher_task': 'Write one sentence about your daily routine using the simple present tense.',
                     'reference_answer': 'I drink coffee before work every morning.',
                     'explanation': 'Describe a routine using the simple present.',
+                    'task_type': 'simple_present_sentence',
                 },
             ],
         }
@@ -1456,21 +1655,25 @@ def _module_focus_profile(module):
     if skill_lower == 'vocabulary':
         return {
             'focus_label': title.lower() if title else 'vocabulary',
+            'lesson_objective': objective_summary,
             'tasks': [
                 {
-                    'teacher_task': f'Write one sentence using a useful {skill_name.lower()} word from this lesson.',
+                    'teacher_task': f'Write a sentence using useful vocabulary from "{title}" or the lesson objective.',
                     'reference_answer': 'I use clear and polite vocabulary at work.',
-                    'explanation': 'Use a target word in a clear, complete sentence.',
+                    'explanation': 'Use target vocabulary in a clear, complete sentence.',
+                    'task_type': 'vocabulary_sentence',
                 },
                 {
-                    'teacher_task': 'Rewrite this sentence with a stronger vocabulary word: "The meeting was good."',
+                    'teacher_task': 'Match a key lesson word to a stronger meaning by rewriting this sentence: "The meeting was good."',
                     'reference_answer': 'The meeting was productive.',
                     'explanation': 'Choose a more precise vocabulary word to improve meaning.',
+                    'task_type': 'vocabulary_rewrite',
                 },
                 {
-                    'teacher_task': f'Write one short sentence that uses two useful words related to "{title}".',
-                    'reference_answer': 'I schedule meetings and answer customer emails.',
-                    'explanation': 'Combine relevant vocabulary in one natural sentence.',
+                    'teacher_task': f'Write a short paragraph or two connected sentences using lesson vocabulary related to "{title}".',
+                    'reference_answer': 'I schedule meetings and answer customer emails with clear and professional language.',
+                    'explanation': 'Use more than one target word naturally to match the lesson vocabulary objective.',
+                    'task_type': 'vocabulary_paragraph',
                 },
             ],
         }
@@ -1478,42 +1681,50 @@ def _module_focus_profile(module):
     if skill_lower == 'speaking':
         return {
             'focus_label': title.lower() if title else 'spoken communication',
+            'lesson_objective': objective_summary,
             'tasks': [
                 {
                     'teacher_task': 'Write the sentence you would say to introduce yourself clearly.',
                     'reference_answer': 'Hello, my name is Maria, and I work in customer support.',
                     'explanation': 'Use a clear spoken sentence with complete ideas.',
+                    'task_type': 'speaking_sentence',
                 },
                 {
                     'teacher_task': 'Answer this question in one complete sentence: "Why are you learning English?"',
                     'reference_answer': 'I am learning English to communicate better at work.',
                     'explanation': 'Answer the question directly and clearly.',
+                    'task_type': 'speaking_sentence',
                 },
                 {
                     'teacher_task': 'Write one polite response you could say in a workplace conversation.',
                     'reference_answer': 'Sure, I can help you with that task this afternoon.',
                     'explanation': 'Use a natural and polite spoken response.',
+                    'task_type': 'speaking_sentence',
                 },
             ],
         }
 
     return {
         'focus_label': skill_name.lower(),
+        'lesson_objective': objective_summary,
         'tasks': [
             {
                 'teacher_task': f'Write one complete sentence that practices {skill_name.lower()}.',
                 'reference_answer': 'I practice English every day.',
                 'explanation': 'Use a clear complete sentence related to the skill.',
+                'task_type': 'generic_sentence',
             },
             {
                 'teacher_task': 'Improve this sentence so it sounds more natural: "I do English practice every day."',
                 'reference_answer': 'I practice English every day.',
                 'explanation': 'Choose the more natural English phrasing.',
+                'task_type': 'generic_rewrite',
             },
             {
                 'teacher_task': f'Write one more sentence to show progress in {skill_name.lower()}.',
                 'reference_answer': 'I want to improve my English for work and daily life.',
                 'explanation': 'Show the skill in a meaningful sentence.',
+                'task_type': 'generic_sentence',
             },
         ],
     }
@@ -1521,6 +1732,10 @@ def _module_focus_profile(module):
 
 def _teacher_tasks_for_module(module):
     return _module_focus_profile(module)['tasks']
+
+
+def _teacher_objective_for_module(module):
+    return _module_focus_profile(module)['lesson_objective']
 
 
 def _serialize_lesson_turn(turn):
@@ -1539,6 +1754,7 @@ def _serialize_lesson_turn(turn):
 def _serialize_guided_session(lesson_session):
     study_session = lesson_session.study_session
     turns = [_serialize_lesson_turn(turn) for turn in lesson_session.turns.all()]
+    lesson_objective = _teacher_objective_for_module(study_session.module)
     current_task = None
     if lesson_session.status != 'completed':
         tasks = _teacher_tasks_for_module(study_session.module)
@@ -1567,6 +1783,7 @@ def _serialize_guided_session(lesson_session):
         'study_session_id': study_session.id,
         'module': _serialize_module(study_session.module),
         'lesson': lesson_session.lesson_text or _teacher_lesson_text(study_session.module),
+        'lesson_objective': lesson_objective,
         'status': lesson_session.status,
         'current_turn': lesson_session.current_turn,
         'total_turns': GUIDED_SESSION_TOTAL_TURNS,
@@ -1591,13 +1808,123 @@ def _generic_sentence_feedback(answer_text, task):
     return 84, answer_text.strip(), task['explanation'], 'You answered in a clear complete sentence.'
 
 
+def _descriptive_score_label(score):
+    if score >= 85:
+        return 'high'
+    if score >= 70:
+        return 'good'
+    if score >= 55:
+        return 'developing'
+    return 'low'
+
+
+def _clarity_score(answer_text):
+    word_count = len(re.findall(r"[A-Za-z']+", answer_text))
+    if word_count < 4:
+        return 45
+    if word_count < 8:
+        return 72
+    return 88
+
+
+def _grammar_accuracy_score(answer_text, task_type):
+    has_tense_issue = re.search(
+        r'\b(yesterday|last\s+\w+)\b[^.!?]*\b'
+        r'(go|come|eat|see|do|have|make|take)\b',
+        answer_text,
+        flags=re.IGNORECASE,
+    )
+    has_agreement_issue = re.search(
+        r'\b(he|she|it)\s+(go|live|work|study|play|like|want)\b',
+        answer_text,
+        flags=re.IGNORECASE,
+    )
+    if task_type == 'past_tense_sentence' and has_tense_issue:
+        return 58
+    if task_type == 'simple_present_sentence' and has_agreement_issue:
+        return 60
+    if has_tense_issue or has_agreement_issue:
+        return 65
+    return 90
+
+
+def _objective_match_score(module, task, answer_text):
+    task_type = task.get('task_type')
+    answer_lower = answer_text.lower()
+    word_count = len(re.findall(r"[A-Za-z']+", answer_text))
+
+    if task_type in {'complex_sentence_conjunction', 'complex_sentence_clause'}:
+        has_conjunction = bool(
+            re.search(r'\b(although|because|while|if|when|since|unless|after|before)\b', answer_text, flags=re.IGNORECASE)
+        )
+        has_clause_shape = has_conjunction and (',' in answer_text or word_count >= 9)
+        return 92 if has_clause_shape else 42
+
+    if task_type == 'vocabulary_sentence':
+        return 82 if word_count >= 6 else 60
+    if task_type == 'vocabulary_rewrite':
+        return 88 if 'good' not in answer_lower and word_count >= 3 else 52
+    if task_type == 'vocabulary_paragraph':
+        return 86 if word_count >= 12 else 58
+    if task_type in {'simple_present_sentence', 'past_tense_sentence', 'speaking_sentence', 'generic_sentence'}:
+        return 84 if word_count >= 6 else 62
+    return 80 if word_count >= 6 else 60
+
+
+def _teacher_feedback_from_breakdown(module, task, answer_text, grammar_accuracy, objective_match, clarity):
+    skill_lower = module.skill.name.lower()
+    task_type = task.get('task_type')
+    grammar_label = _descriptive_score_label(grammar_accuracy)
+    objective_label = _descriptive_score_label(objective_match)
+    clarity_label = _descriptive_score_label(clarity)
+
+    explanation = (
+        f'Grammar accuracy: {grammar_label}. '
+        f'Objective match: {objective_label}. '
+        f'Clarity: {clarity_label}. '
+        f'{task["explanation"]}'
+    )
+
+    if task_type in {'complex_sentence_conjunction', 'complex_sentence_clause'} and objective_match < 60:
+        feedback = (
+            'Your sentence is correct, but it does not show a complex sentence. '
+            'Try using although, because, or while.'
+        )
+        correction = task['reference_answer']
+        return feedback, correction, explanation
+
+    if skill_lower == 'vocabulary' and objective_match < 60:
+        feedback = 'Your answer is clear, but it needs more lesson vocabulary to match this task.'
+        correction = task['reference_answer']
+        return feedback, correction, explanation
+
+    if grammar_accuracy < 70:
+        feedback = 'Your answer shows the main idea, but review the grammar pattern needed for this lesson.'
+        correction = task['reference_answer']
+        return feedback, correction, explanation
+
+    if clarity < 60:
+        feedback = 'Your answer needs more detail so it clearly completes the task.'
+        correction = task['reference_answer']
+        return feedback, correction, explanation
+
+    if objective_match < 75:
+        feedback = 'Your answer is mostly correct, but it does not fully match the lesson objective yet.'
+        correction = task['reference_answer']
+        return feedback, correction, explanation
+
+    feedback = 'Your answer is correct and matches the lesson objective.'
+    correction = answer_text.strip()
+    return feedback, correction, explanation
+
+
 def _evaluate_task_fallback(module, turn_number, answer):
     tasks = _teacher_tasks_for_module(module)
     task = tasks[turn_number - 1]
     answer_text = answer.strip()
     answer_lower = answer_text.lower()
-    title_lower = (module.title or '').lower()
     skill_lower = module.skill.name.lower()
+    task_type = task.get('task_type')
 
     if not answer_text:
         return {
@@ -1608,8 +1935,26 @@ def _evaluate_task_fallback(module, turn_number, answer):
             'encouragement': 'Take another try with one clear sentence.',
         }
 
+    if task_type == 'sentence_correction':
+        expected = _normalized_compare_text(task['reference_answer'])
+        if _normalized_compare_text(answer_text) == expected:
+            return {
+                'score': 95,
+                'feedback': 'Excellent correction. You fixed the target sentence correctly.',
+                'correction': task['reference_answer'],
+                'explanation': task['explanation'],
+                'encouragement': _encouragement_for_score(95),
+            }
+        return {
+            'score': 62,
+            'feedback': f'Good try. The correct sentence is: {task["reference_answer"]}',
+            'correction': task['reference_answer'],
+            'explanation': task['explanation'],
+            'encouragement': _encouragement_for_score(62),
+        }
+
     if skill_lower == 'grammar':
-        if turn_number == 2:
+        if turn_number == 2 and task_type == 'sentence_correction':
             expected = _normalized_compare_text(task['reference_answer'])
             if _normalized_compare_text(answer_text) == expected:
                 return {
@@ -1619,82 +1964,74 @@ def _evaluate_task_fallback(module, turn_number, answer):
                     'explanation': task['explanation'],
                     'encouragement': _encouragement_for_score(95),
                 }
-            return {
-                'score': 62,
-                'feedback': f'Good try. The correct sentence is: {task["reference_answer"]}',
-                'correction': task['reference_answer'],
-                'explanation': task['explanation'],
-                'encouragement': _encouragement_for_score(62),
-            }
-
-        if 'past' in title_lower:
-            has_tense_issue = re.search(
-                r'\b(yesterday|last\s+\w+)\b[^.!?]*\b'
-                r'(go|come|eat|see|do|have|make|take)\b',
-                answer_text,
-                flags=re.IGNORECASE,
-            )
-            if has_tense_issue:
-                return {
-                    'score': 62,
-                    'feedback': 'Good attempt. Review the past tense verb in your sentence.',
-                    'correction': task['reference_answer'],
-                    'explanation': task['explanation'],
-                    'encouragement': _encouragement_for_score(62),
-                }
-        else:
-            has_agreement_issue = re.search(
-                r'\b(he|she|it)\s+(go|live|work|study|play|like|want)\b',
-                answer_text,
-                flags=re.IGNORECASE,
-            )
-            if has_agreement_issue:
-                return {
-                    'score': 60,
-                    'feedback': 'Good try. Review subject-verb agreement in the simple present tense.',
-                    'correction': task['reference_answer'],
-                    'explanation': task['explanation'],
-                    'encouragement': _encouragement_for_score(60),
-                }
-
-        score, correction, explanation, feedback = _generic_sentence_feedback(answer_text, task)
+        grammar_accuracy = _grammar_accuracy_score(answer_text, task_type)
+        objective_match = _objective_match_score(module, task, answer_text)
+        clarity = _clarity_score(answer_text)
+        score = _clamp(grammar_accuracy * 0.4 + objective_match * 0.4 + clarity * 0.2)
+        feedback, correction, explanation = _teacher_feedback_from_breakdown(
+            module,
+            task,
+            answer_text,
+            grammar_accuracy,
+            objective_match,
+            clarity,
+        )
         return {
             'score': score,
             'feedback': feedback,
             'correction': correction,
             'explanation': explanation,
             'encouragement': _encouragement_for_score(score),
+            'grammar_accuracy': grammar_accuracy,
+            'objective_match': objective_match,
+            'clarity': clarity,
         }
 
     if skill_lower == 'vocabulary':
-        word_count = len(re.findall(r"[A-Za-z']+", answer_text))
-        if turn_number == 2 and re.search(r'\bgood\b', answer_lower):
-            return {
-                'score': 68,
-                'feedback': f'Good attempt. A stronger word is shown in this model answer: {task["reference_answer"]}',
-                'correction': task['reference_answer'],
-                'explanation': task['explanation'],
-                'encouragement': _encouragement_for_score(68),
-            }
-        score = 58 if word_count < 5 else 82
-        feedback = 'Use more detail and more precise words.' if score < 80 else 'You used vocabulary in a clear sentence.'
+        grammar_accuracy = _grammar_accuracy_score(answer_text, task_type)
+        objective_match = _objective_match_score(module, task, answer_text)
+        clarity = _clarity_score(answer_text)
+        score = _clamp(grammar_accuracy * 0.25 + objective_match * 0.5 + clarity * 0.25)
+        feedback, correction, explanation = _teacher_feedback_from_breakdown(
+            module,
+            task,
+            answer_text,
+            grammar_accuracy,
+            objective_match,
+            clarity,
+        )
         return {
             'score': score,
             'feedback': feedback,
-            'correction': answer_text if score >= 80 else task['reference_answer'],
-            'explanation': task['explanation'],
+            'correction': correction,
+            'explanation': explanation,
             'encouragement': _encouragement_for_score(score),
+            'grammar_accuracy': grammar_accuracy,
+            'objective_match': objective_match,
+            'clarity': clarity,
         }
 
-    word_count = len(re.findall(r"[A-Za-z']+", answer_text))
-    score = 55 if word_count < 5 else 78 if word_count < 9 else 88
-    feedback = 'Add more detail so your answer sounds more complete.' if score < 80 else 'Your answer is clear and appropriate for the task.'
+    grammar_accuracy = _grammar_accuracy_score(answer_text, task_type)
+    objective_match = _objective_match_score(module, task, answer_text)
+    clarity = _clarity_score(answer_text)
+    score = _clamp(grammar_accuracy * 0.3 + objective_match * 0.35 + clarity * 0.35)
+    feedback, correction, explanation = _teacher_feedback_from_breakdown(
+        module,
+        task,
+        answer_text,
+        grammar_accuracy,
+        objective_match,
+        clarity,
+    )
     return {
         'score': score,
         'feedback': feedback,
-        'correction': answer_text if score >= 80 else task['reference_answer'],
-        'explanation': task['explanation'],
+        'correction': correction,
+        'explanation': explanation,
         'encouragement': _encouragement_for_score(score),
+        'grammar_accuracy': grammar_accuracy,
+        'objective_match': objective_match,
+        'clarity': clarity,
     }
 
 
