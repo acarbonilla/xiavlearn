@@ -35,6 +35,10 @@ export default function DashboardPage() {
               <p className="mt-2 text-4xl font-black text-[#335cff]">
                 {dashboard.profile.current_level || "Not assessed"}
               </p>
+              <p className="mt-3 text-sm leading-6 text-[#60708a]">
+                Official level advances after diagnostics when Grammar,
+                Vocabulary, Listening, and Speaking are all 80% or higher.
+              </p>
             </Card>
             <Card className="md:col-span-2">
               <p className="text-sm font-bold text-[#60708a]">
@@ -54,6 +58,10 @@ export default function DashboardPage() {
 
           <section>
             <h2 className="mb-4 text-2xl font-bold">Skill mastery</h2>
+            <p className="mb-4 text-sm leading-6 text-[#60708a]">
+              These are your official mastery scores. Practice sessions do not
+              change them.
+            </p>
             {dashboard.skill_mastery.length ? (
               <div className="grid md:grid-cols-2 lg:grid-cols-3">
                 {dashboard.skill_mastery.map((mastery) => (

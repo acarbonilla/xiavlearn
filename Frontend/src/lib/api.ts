@@ -34,7 +34,11 @@ export type DashboardData = {
   }>;
   recommended_module: ModuleSummary | null;
   latest_study_plan: {
-    plan_data: { focus?: string[]; days?: string[] };
+    plan_data: {
+      focus?: string[];
+      days?: string[];
+      items?: StudyPlanItem[];
+    };
     focus_skills: string[];
     start_date: string;
     end_date: string;
@@ -92,6 +96,12 @@ export type RecommendationData = {
     Listening: number | null;
     Speaking: number | null;
   };
+  current_skill_scores: {
+    Vocabulary: number | null;
+    Grammar: number | null;
+    Listening: number | null;
+    Speaking: number | null;
+  };
   weakest_skill: string | null;
 };
 
@@ -102,20 +112,81 @@ export type TeacherSession = {
 };
 
 export type TeacherFeedback = {
-  score: number;
+  session_score: number;
   feedback: string;
-  updated_mastery: {
-    skill: string;
-    score: number;
-    status: string;
-  };
+  correction?: string;
+  explanation?: string;
+  encouragement?: string;
+  completed?: boolean;
+  next_task?: {
+    turn_number: number;
+    teacher_task: string;
+  } | null;
+  final_result?: GuidedTeacherFinalResult | null;
+};
+
+export type GuidedTeacherTurn = {
+  turn_number: number;
+  teacher_task: string;
+  student_answer: string;
+  score: number | null;
+  feedback: string;
+  correction: string;
+  explanation: string;
+  encouragement: string;
+};
+
+export type GuidedTeacherFinalResult = {
+  session_score: number | null;
+  strengths: string[];
+  improvement_areas: string[];
+  next_study_suggestion: string;
+  feedback_summary: string;
+};
+
+export type GuidedTeacherSession = {
+  session_id: number;
+  study_session_id: number;
+  module: ModuleSummary | null;
+  lesson: string;
+  status: string;
+  current_turn: number;
+  total_turns: number;
+  current_task: {
+    turn_number: number;
+    teacher_task: string;
+  } | null;
+  turns: GuidedTeacherTurn[];
+  final_result: GuidedTeacherFinalResult | null;
+};
+
+export type GuidedTeacherAnswerResponse = {
+  session_id: number;
+  turn: GuidedTeacherTurn;
+  completed: boolean;
+  next_task: {
+    turn_number: number;
+    teacher_task: string;
+  } | null;
+  final_result: GuidedTeacherFinalResult | null;
 };
 
 export type StudyPlanData = {
   plan: {
     focus: string[];
     days: string[];
+    items: StudyPlanItem[];
   };
+};
+
+export type StudyPlanItem = {
+  day: string;
+  title: string;
+  skill: string;
+  level: string | null;
+  module_id: number | null;
+  module_title: string | null;
+  href: string;
 };
 
 export type CoachSummary = {
@@ -357,6 +428,27 @@ export function submitTeacherFeedback(sessionId: number, answer: string) {
     method: "POST",
     body: JSON.stringify({ session_id: sessionId, answer }),
   });
+}
+
+export function startGuidedTeacherSession(moduleId?: number) {
+  return request<GuidedTeacherSession>("/api/teacher/session/start/", {
+    method: "POST",
+    body: JSON.stringify(moduleId ? { module_id: moduleId } : {}),
+  });
+}
+
+export function submitGuidedTeacherAnswer(
+  sessionId: number,
+  studentAnswer: string,
+) {
+  return request<GuidedTeacherAnswerResponse>("/api/teacher/session/answer/", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, student_answer: studentAnswer }),
+  });
+}
+
+export function getGuidedTeacherSession(sessionId: number) {
+  return request<GuidedTeacherSession>(`/api/teacher/session/${sessionId}/`);
 }
 
 export function generateStudyPlan() {

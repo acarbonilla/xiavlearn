@@ -5,6 +5,9 @@ from .views import (
     CurriculumRecommendationView,
     DiagnosticEvaluateView,
     SchedulerGeneratePlanView,
+    TeacherSessionAnswerView,
+    TeacherSessionDetailView,
+    TeacherSessionStartView,
     TeacherFeedbackView,
     TeacherSessionView,
 )
@@ -32,6 +35,21 @@ urlpatterns = [
         'teacher/session/',
         TeacherSessionView.as_view(),
         name='teacher-session',
+    ),
+    path(
+        'teacher/session/start/',
+        TeacherSessionStartView.as_view(),
+        name='teacher-session-start',
+    ),
+    path(
+        'teacher/session/answer/',
+        TeacherSessionAnswerView.as_view(),
+        name='teacher-session-answer',
+    ),
+    path(
+        'teacher/session/<int:session_id>/',
+        TeacherSessionDetailView.as_view(),
+        name='teacher-session-detail',
     ),
     path(
         'teacher/feedback/',

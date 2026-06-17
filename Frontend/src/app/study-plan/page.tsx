@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 import Button from "@/components/Button";
@@ -67,27 +68,44 @@ export default function StudyPlanPage() {
               ))}
             </div>
             <ol className="mt-6 grid gap-3">
-              {plan.plan.days.map((day) => (
-                <li
-                  className="rounded-xl border border-[#dce4ef] bg-[#fbfdff] p-4"
-                  key={day}
-                >
-                  {day}
+              {plan.plan.items.map((item) => (
+                <li key={item.day}>
+                  <Link
+                    className="block rounded-xl border border-[#dce4ef] bg-[#fbfdff] p-4 transition hover:border-[#335cff] hover:bg-[#f4f7ff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#335cff] focus-visible:ring-offset-2"
+                    href={item.href}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-sm font-bold uppercase tracking-wider text-[#335cff]">
+                        {item.day}
+                      </p>
+                      <span className="rounded-full bg-[#e9eeff] px-3 py-1 text-xs font-bold text-[#335cff]">
+                        {item.level ? `${item.level} - ${item.skill}` : item.skill}
+                      </span>
+                    </div>
+                    <h3 className="mt-3 text-lg font-bold text-[#14213d]">
+                      {item.title}
+                    </h3>
+                    <p className="mt-2 text-sm leading-6 text-[#60708a]">
+                      {item.module_id
+                        ? "Open this guided lesson and continue your weekly focus."
+                        : "Open your recommendation to choose the next lesson."}
+                    </p>
+                  </Link>
                 </li>
               ))}
             </ol>
           </Card>
-          <Card className="bg-[#14213d] text-white">
-            <p className="text-sm font-bold uppercase tracking-wider text-[#8fa4ff]">
+          <Card className="bg-[#f4f7ff]">
+            <p className="text-sm font-bold uppercase tracking-wider text-[#335cff]">
               Coach summary
             </p>
-            <h2 className="mt-4 text-2xl font-bold">
+            <h2 className="mt-4 text-2xl font-bold text-[#14213d]">
               {coach?.summary ?? "Loading coaching guidance..."}
             </h2>
             {coach ? (
               <>
-                <p className="mt-6 text-sm font-bold text-[#aebbe8]">Next step</p>
-                <p className="mt-2 leading-7 text-[#d6def1]">{coach.next_step}</p>
+                <p className="mt-6 text-sm font-bold text-[#42536b]">Next step</p>
+                <p className="mt-2 leading-7 text-[#42536b]">{coach.next_step}</p>
                 <Button className="mt-6" href="/dashboard">
                   Return to Dashboard
                 </Button>

@@ -16,6 +16,7 @@ from learning.models import (
 )
 
 from .llm_client import call_llm_json
+from .models import LessonSession, LessonTurn
 from .prompts import (
     coach_summary_prompt,
     diagnostic_prompt,
@@ -42,6 +43,8 @@ DIAGNOSTIC_SKILL_STATUS = {
     'Pronunciation': 'Requires voice test',
 }
 CEFR_LEVELS = {'A1', 'A2', 'B1', 'B2'}
+CEFR_PROGRESSION_ORDER = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2']
+CORE_SKILL_NAMES = ['Grammar', 'Vocabulary', 'Listening', 'Speaking']
 SKILL_NAME_LOOKUP = {name.lower(): name for name in SKILL_NAMES}
 MISTAKE_TYPES = {
     'grammar': 'Grammar',
@@ -82,7 +85,7 @@ COMMON_WORDS = {
     'a', 'about', 'after', 'am', 'an', 'and', 'are', 'at', 'basic', 'based',
     'be', 'because', 'can', 'capital', 'city', 'clear', 'clearly',
     'communication', 'company', 'confidently', 'continue', 'describe', 'did',
-    'do', 'english', 'every', 'for', 'goal', 'good', 'hello', 'hi', 'home',
+    'confident', 'do', 'english', 'every', 'for', 'goal', 'good', 'hello', 'hi', 'home',
     'i', 'improve', 'in', 'introduce', 'international', 'is', 'it', 'learn',
     'learning', 'live', 'living', 'my', 'name', 'next', 'practice', 'region',
     'same', 'school', 'sentence', 'simple', 'speak', 'speaking', 'specialist',
@@ -97,6 +100,7 @@ SPELLING_HINTS = {
     'thisss': 'this',
     'gola': 'goal',
 }
+GUIDED_SESSION_TOTAL_TURNS = 3
 
 
 def _clamp(value, minimum=0, maximum=100):
@@ -119,6 +123,50 @@ def _status_for_score(score):
     if score < 80:
         return 'Learning'
     return 'Mastered'
+
+
+@transaction.atomic
+def recalculate_learner_level(user):
+    profile, _ = LearnerProfile.objects.get_or_create(user=user)
+    current_level = (profile.current_level or 'A1').upper()
+    if current_level not in CEFR_PROGRESSION_ORDER:
+        current_level = 'A1'
+
+    if current_level == 'C2':
+        if profile.current_level != 'C2':
+            profile.current_level = 'C2'
+            profile.save(update_fields=['current_level', 'updated_at'])
+        return 'C2'
+
+    masteries = SkillMastery.objects.filter(
+        user=user,
+        skill__name__in=CORE_SKILL_NAMES,
+    ).select_related('skill')
+    score_lookup = {
+        mastery.skill.name: float(mastery.score)
+        for mastery in masteries
+    }
+    if any(skill_name not in score_lookup for skill_name in CORE_SKILL_NAMES):
+        if profile.current_level != current_level:
+            profile.current_level = current_level
+            profile.save(update_fields=['current_level', 'updated_at'])
+        return current_level
+
+    if not all(score_lookup[skill_name] >= 80 for skill_name in CORE_SKILL_NAMES):
+        if profile.current_level != current_level:
+            profile.current_level = current_level
+            profile.save(update_fields=['current_level', 'updated_at'])
+        return current_level
+
+    next_index = min(
+        CEFR_PROGRESSION_ORDER.index(current_level) + 1,
+        len(CEFR_PROGRESSION_ORDER) - 1,
+    )
+    next_level = CEFR_PROGRESSION_ORDER[next_index]
+    if next_level != profile.current_level:
+        profile.current_level = next_level
+        profile.save(update_fields=['current_level', 'updated_at'])
+    return next_level
 
 
 def _serialize_module(module):
@@ -285,6 +333,100 @@ def score_diagnostic_answers(answers):
             + min(metrics['long_word_count'] * 2, 8)
         ),
     }
+
+
+def _diagnostic_issue_counts(feedback_items):
+    counts = {
+        'clear_feedback_count': 0,
+        'unclear_answers': 0,
+        'grammar_issues': 0,
+        'spelling_issues': 0,
+        'clarity_issues': 0,
+        'structure_issues': 0,
+        'naturalness_issues': 0,
+        'total_issues': 0,
+    }
+
+    for item in feedback_items:
+        feedback = (item.get('feedback') or '').lower()
+        mistakes = item.get('mistakes') or []
+        if 'already clear, correct, and complete' in feedback:
+            counts['clear_feedback_count'] += 1
+        if 'unclear' in feedback:
+            counts['unclear_answers'] += 1
+
+        for mistake in mistakes:
+            mistake_type = mistake.get('type')
+            counts['total_issues'] += 1
+            if mistake_type == 'Grammar':
+                counts['grammar_issues'] += 1
+            elif mistake_type == 'Spelling':
+                counts['spelling_issues'] += 1
+            elif mistake_type == 'Clarity':
+                counts['clarity_issues'] += 1
+            elif mistake_type == 'Sentence Structure':
+                counts['structure_issues'] += 1
+            elif mistake_type == 'Naturalness':
+                counts['naturalness_issues'] += 1
+
+    counts['unclear_answers'] = max(
+        counts['unclear_answers'],
+        sum(
+            1
+            for item in feedback_items
+            if any(
+                mistake.get('type') == 'Clarity'
+                for mistake in (item.get('mistakes') or [])
+            )
+        ),
+    )
+    return counts
+
+
+def _apply_diagnostic_score_floor(skill_scores, feedback_items, base_scores):
+    counts = _diagnostic_issue_counts(feedback_items)
+    clear_majority = counts['clear_feedback_count'] >= max(1, len(feedback_items) // 2 + 1)
+    has_major_issues = any(
+        counts[key] > 0
+        for key in ['grammar_issues', 'clarity_issues', 'structure_issues', 'unclear_answers']
+    )
+    has_strong_base = all(base_scores[skill_name] >= 70 for skill_name in ['Grammar', 'Vocabulary'])
+    if not clear_majority or has_major_issues or not has_strong_base:
+        return skill_scores
+
+    minimum_score = 85 if counts['total_issues'] == 0 else 80
+    return {
+        skill_name: max(score, minimum_score)
+        for skill_name, score in skill_scores.items()
+    }
+
+
+def _diagnostic_score_reasons(skill_scores, feedback_items):
+    counts = _diagnostic_issue_counts(feedback_items)
+    has_major_issues = any(
+        counts[key] > 0
+        for key in ['grammar_issues', 'clarity_issues', 'structure_issues', 'unclear_answers']
+    )
+
+    if counts['total_issues'] == 0 and min(skill_scores.values()) >= 85:
+        grammar_reason = 'Your answers were clear, correct, and complete across the diagnostic.'
+        vocabulary_reason = (
+            'You used appropriate workplace, learning, and everyday vocabulary with good range.'
+        )
+    elif counts['total_issues'] == 0:
+        grammar_reason = 'Your answers were clear and accurate, but they were brief enough to limit the score range.'
+        vocabulary_reason = 'Your vocabulary was appropriate, but the answers were not detailed enough to show a wider range.'
+    elif not has_major_issues and counts['total_issues'] <= 2:
+        grammar_reason = 'Your answers were mostly accurate with only minor issues.'
+        vocabulary_reason = 'You used appropriate vocabulary with only minor wording or spelling issues.'
+    elif skill_scores['Grammar'] >= 70:
+        grammar_reason = 'Your answers communicated the main ideas, but some grammar control was inconsistent.'
+        vocabulary_reason = 'You used useful vocabulary, but some word choice or clarity issues reduced the score.'
+    else:
+        grammar_reason = 'Your answers need clearer sentence control and more consistent grammar.'
+        vocabulary_reason = 'Your vocabulary needs clearer, more accurate word choice to express ideas consistently.'
+
+    return grammar_reason, vocabulary_reason
 
 
 def _extract_intro_name(answer_text):
@@ -895,9 +1037,25 @@ def _build_rule_based_diagnostic_result(answers):
             for name, score in skill_scores.items()
         }
 
+    feedback_items = [
+        {
+            'feedback': item['feedback'],
+            'mistakes': item['mistakes'],
+        }
+        for item in diagnostics
+    ]
+    skill_scores = _apply_diagnostic_score_floor(
+        skill_scores,
+        feedback_items,
+        base_scores,
+    )
     average_score = sum(skill_scores.values()) / len(skill_scores)
     overall_level = _level_for_score(average_score)
     weak_skills = sorted(skill_scores, key=lambda name: (skill_scores[name], name))[:2]
+    grammar_reason, vocabulary_reason = _diagnostic_score_reasons(
+        skill_scores,
+        feedback_items,
+    )
     if unclear_answers >= 2 or total_issues >= 6:
         recommendation = (
             'Focus on forming clear basic sentences and correcting common grammar errors.'
@@ -914,6 +1072,8 @@ def _build_rule_based_diagnostic_result(answers):
         'weak_skills': weak_skills,
         'recommendation': recommendation,
         'level_explanation': _rule_based_level_explanation(overall_level, diagnostics),
+        'grammar_reason': grammar_reason,
+        'vocabulary_reason': vocabulary_reason,
         'answer_feedback': [
             {
                 'question': item['question'],
@@ -969,6 +1129,25 @@ def _diagnostic_result_from_llm(answers, fallback_result):
         llm_payload.get('answer_feedback'),
         answers,
     )
+    result['skill_scores'] = _apply_diagnostic_score_floor(
+        result['skill_scores'],
+        result['answer_feedback'],
+        score_diagnostic_answers(answers),
+    )
+    result['weak_skills'] = sorted(
+        result['skill_scores'],
+        key=lambda name: (result['skill_scores'][name], name),
+    )[:2]
+    if not overall_level or overall_level not in CEFR_LEVELS:
+        result['overall_level'] = _level_for_score(
+            sum(result['skill_scores'].values()) / len(result['skill_scores'])
+        )
+    grammar_reason, vocabulary_reason = _diagnostic_score_reasons(
+        result['skill_scores'],
+        result['answer_feedback'],
+    )
+    result['grammar_reason'] = grammar_reason
+    result['vocabulary_reason'] = vocabulary_reason
     result['next_step'] = (
         _normalize_text(llm_payload.get('next_step'))
         or fallback_result['next_step']
@@ -1047,6 +1226,7 @@ def evaluate_diagnostic(user, answers):
             },
         )
 
+    recalculate_learner_level(user)
     return diagnostic_result
 
 def get_curriculum_recommendation(user):
@@ -1106,7 +1286,7 @@ def get_curriculum_recommendation(user):
         mastery.skill.name: int(mastery.score)
         for mastery in masteries
     }
-    diagnostic_scores = {
+    current_skill_scores = {
         'Vocabulary': score_lookup.get('Vocabulary'),
         'Grammar': score_lookup.get('Grammar'),
         'Listening': score_lookup.get('Listening'),
@@ -1116,38 +1296,570 @@ def get_curriculum_recommendation(user):
     return {
         'recommended_module': _serialize_module(module),
         'reason': reason,
-        'diagnostic_scores': diagnostic_scores,
+        'diagnostic_scores': current_skill_scores,
+        'current_skill_scores': current_skill_scores,
         'weakest_skill': weakest.skill.name if weakest else None,
     }
 
 
+def _join_with_and(values):
+    items = [value for value in values if value]
+    if not items:
+        return ''
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f'{items[0]} and {items[1]}'
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+def _study_plan_focus_skills(user):
+    masteries = list(
+        SkillMastery.objects.filter(user=user)
+        .select_related('skill')
+        .order_by('score', 'skill__name')[:2]
+    )
+    focus = [mastery.skill.name for mastery in masteries]
+    if not focus:
+        focus = list(
+            Skill.objects.order_by('id').values_list('name', flat=True)[:2]
+        )
+    return focus
+
+
+def _study_plan_module_for_skill(user, skill_name, preferred_level):
+    active_modules = Module.objects.filter(
+        is_active=True,
+        skill__name=skill_name,
+    ).select_related('level', 'skill')
+
+    if preferred_level:
+        module = active_modules.filter(
+            level__level_code=preferred_level,
+        ).order_by('sort_order', 'id').first()
+        if module:
+            return module
+
+    recommendation = get_curriculum_recommendation(user)
+    recommended_module = recommendation.get('recommended_module')
+    if (
+        recommended_module
+        and recommended_module.get('skill') == skill_name
+    ):
+        module = active_modules.filter(pk=recommended_module['id']).first()
+        if module:
+            return module
+
+    return active_modules.order_by('level__sort_order', 'sort_order', 'id').first()
+
+
+def _build_study_plan_items(user, focus):
+    profile, _ = LearnerProfile.objects.get_or_create(user=user)
+    preferred_level = profile.current_level or None
+    items = []
+    for index, skill_name in enumerate(focus, start=1):
+        module = _study_plan_module_for_skill(user, skill_name, preferred_level)
+        module_title = module.title if module else None
+        level_code = module.level.level_code if module else preferred_level
+        title = (
+            f'{skill_name} - {module_title}'
+            if module_title
+            else f'{skill_name} - Recommended lesson'
+        )
+        items.append(
+            {
+                'day': f'Day {index}',
+                'title': title,
+                'skill': skill_name,
+                'level': level_code,
+                'module_id': module.id if module else None,
+                'module_title': module_title,
+                'href': f'/feedback?moduleId={module.id}' if module else '/recommendation',
+            }
+        )
+    return items
+
+
 @transaction.atomic
 def create_teacher_session(user, module):
-    session = StudySession.objects.create(
-        user=user,
-        module=module,
-        session_type='lesson',
-    )
+    session_state = start_guided_teacher_session(user, module)
+    current_task = session_state['current_task']
+    return {
+        'session_id': session_state['study_session_id'],
+        'lesson': session_state['lesson'],
+        'practice_question': current_task['teacher_task'] if current_task else '',
+    }
+
+
+def _teacher_lesson_text(module):
     lesson_result = _lesson_result_from_llm(module)
-    if lesson_result is None:
-        objectives = module.objectives or []
-        objective_text = '; '.join(objectives) if objectives else module.description
-        lesson_result = {
-            'lesson': (
-                f'{module.title}: {module.description} '
-                f'Learning objectives: {objective_text}.'
-            ).strip(),
-            'practice_question': (
-                'Write one English sentence that demonstrates: '
-                f'{objectives[0] if objectives else module.title}.'
-            ),
+    if lesson_result is not None:
+        return lesson_result['lesson']
+
+    objectives = module.objectives or []
+    objective_text = '; '.join(objectives) if objectives else module.description
+    return (
+        f'{module.title}: {module.description} '
+        f'Learning objectives: {objective_text}.'
+    ).strip()
+
+
+def _module_focus_profile(module):
+    title = (module.title or '').strip()
+    title_lower = title.lower()
+    skill_name = module.skill.name
+    skill_lower = skill_name.lower()
+
+    if skill_lower == 'grammar':
+        if 'past' in title_lower:
+            return {
+                'focus_label': 'past tense',
+                'tasks': [
+                    {
+                        'teacher_task': 'Write one sentence about something you did yesterday using the past tense.',
+                        'reference_answer': 'Yesterday, I visited my friend.',
+                        'explanation': 'Use a past tense verb to show the action already happened.',
+                    },
+                    {
+                        'teacher_task': 'Correct this sentence: "She go to school yesterday."',
+                        'reference_answer': 'She went to school yesterday.',
+                        'explanation': 'Use the past tense form "went" for an action that happened yesterday.',
+                    },
+                    {
+                        'teacher_task': 'Write one sentence about your last weekend using the past tense.',
+                        'reference_answer': 'Last weekend, I watched a movie.',
+                        'explanation': 'Use a complete sentence with a past tense verb.',
+                    },
+                ],
+            }
+        return {
+            'focus_label': 'simple present tense',
+            'tasks': [
+                {
+                    'teacher_task': 'Create one sentence using the simple present tense.',
+                    'reference_answer': 'I study English every evening.',
+                    'explanation': 'Use the simple present to describe habits or routines.',
+                },
+                {
+                    'teacher_task': 'Correct this sentence: "She go to school every day."',
+                    'reference_answer': 'She goes to school every day.',
+                    'explanation': 'For he, she, and it, add -s or -es to the verb in the simple present tense.',
+                },
+                {
+                    'teacher_task': 'Write one sentence about your daily routine using the simple present tense.',
+                    'reference_answer': 'I drink coffee before work every morning.',
+                    'explanation': 'Describe a routine using the simple present.',
+                },
+            ],
+        }
+
+    if skill_lower == 'vocabulary':
+        return {
+            'focus_label': title.lower() if title else 'vocabulary',
+            'tasks': [
+                {
+                    'teacher_task': f'Write one sentence using a useful {skill_name.lower()} word from this lesson.',
+                    'reference_answer': 'I use clear and polite vocabulary at work.',
+                    'explanation': 'Use a target word in a clear, complete sentence.',
+                },
+                {
+                    'teacher_task': 'Rewrite this sentence with a stronger vocabulary word: "The meeting was good."',
+                    'reference_answer': 'The meeting was productive.',
+                    'explanation': 'Choose a more precise vocabulary word to improve meaning.',
+                },
+                {
+                    'teacher_task': f'Write one short sentence that uses two useful words related to "{title}".',
+                    'reference_answer': 'I schedule meetings and answer customer emails.',
+                    'explanation': 'Combine relevant vocabulary in one natural sentence.',
+                },
+            ],
+        }
+
+    if skill_lower == 'speaking':
+        return {
+            'focus_label': title.lower() if title else 'spoken communication',
+            'tasks': [
+                {
+                    'teacher_task': 'Write the sentence you would say to introduce yourself clearly.',
+                    'reference_answer': 'Hello, my name is Maria, and I work in customer support.',
+                    'explanation': 'Use a clear spoken sentence with complete ideas.',
+                },
+                {
+                    'teacher_task': 'Answer this question in one complete sentence: "Why are you learning English?"',
+                    'reference_answer': 'I am learning English to communicate better at work.',
+                    'explanation': 'Answer the question directly and clearly.',
+                },
+                {
+                    'teacher_task': 'Write one polite response you could say in a workplace conversation.',
+                    'reference_answer': 'Sure, I can help you with that task this afternoon.',
+                    'explanation': 'Use a natural and polite spoken response.',
+                },
+            ],
         }
 
     return {
-        'session_id': session.id,
-        'lesson': lesson_result['lesson'],
-        'practice_question': lesson_result['practice_question'],
+        'focus_label': skill_name.lower(),
+        'tasks': [
+            {
+                'teacher_task': f'Write one complete sentence that practices {skill_name.lower()}.',
+                'reference_answer': 'I practice English every day.',
+                'explanation': 'Use a clear complete sentence related to the skill.',
+            },
+            {
+                'teacher_task': 'Improve this sentence so it sounds more natural: "I do English practice every day."',
+                'reference_answer': 'I practice English every day.',
+                'explanation': 'Choose the more natural English phrasing.',
+            },
+            {
+                'teacher_task': f'Write one more sentence to show progress in {skill_name.lower()}.',
+                'reference_answer': 'I want to improve my English for work and daily life.',
+                'explanation': 'Show the skill in a meaningful sentence.',
+            },
+        ],
     }
+
+
+def _teacher_tasks_for_module(module):
+    return _module_focus_profile(module)['tasks']
+
+
+def _serialize_lesson_turn(turn):
+    return {
+        'turn_number': turn.turn_number,
+        'teacher_task': turn.teacher_task,
+        'student_answer': turn.student_answer,
+        'score': int(turn.score) if turn.score is not None else None,
+        'feedback': turn.ai_feedback,
+        'correction': turn.correction,
+        'explanation': turn.explanation,
+        'encouragement': turn.encouragement,
+    }
+
+
+def _serialize_guided_session(lesson_session):
+    study_session = lesson_session.study_session
+    turns = [_serialize_lesson_turn(turn) for turn in lesson_session.turns.all()]
+    current_task = None
+    if lesson_session.status != 'completed':
+        tasks = _teacher_tasks_for_module(study_session.module)
+        current_task = {
+            'turn_number': lesson_session.current_turn,
+            'teacher_task': tasks[lesson_session.current_turn - 1]['teacher_task'],
+        }
+
+    final_result = None
+    if lesson_session.status == 'completed':
+        summary = lesson_session.feedback_summary or {}
+        final_result = {
+            'session_score': (
+                summary.get('session_score')
+                if summary.get('session_score') is not None
+                else int(lesson_session.final_score) if lesson_session.final_score is not None else None
+            ),
+            'strengths': summary.get('strengths', []),
+            'improvement_areas': summary.get('improvement_areas', []),
+            'next_study_suggestion': summary.get('next_study_suggestion', ''),
+            'feedback_summary': summary.get('feedback_summary', ''),
+        }
+
+    return {
+        'session_id': lesson_session.id,
+        'study_session_id': study_session.id,
+        'module': _serialize_module(study_session.module),
+        'lesson': lesson_session.lesson_text or _teacher_lesson_text(study_session.module),
+        'status': lesson_session.status,
+        'current_turn': lesson_session.current_turn,
+        'total_turns': GUIDED_SESSION_TOTAL_TURNS,
+        'current_task': current_task,
+        'turns': turns,
+        'final_result': final_result,
+    }
+
+
+def _encouragement_for_score(score):
+    if score >= 85:
+        return 'Strong work. Keep building on that accuracy.'
+    if score >= 70:
+        return 'Good progress. One more revision will make it stronger.'
+    return 'Good effort. Keep practicing and focus on the correction.'
+
+
+def _generic_sentence_feedback(answer_text, task):
+    word_count = len(re.findall(r"[A-Za-z']+", answer_text))
+    if word_count < 4:
+        return 55, task['reference_answer'], task['explanation'], 'Add more detail and answer in one complete sentence.'
+    return 84, answer_text.strip(), task['explanation'], 'You answered in a clear complete sentence.'
+
+
+def _evaluate_task_fallback(module, turn_number, answer):
+    tasks = _teacher_tasks_for_module(module)
+    task = tasks[turn_number - 1]
+    answer_text = answer.strip()
+    answer_lower = answer_text.lower()
+    title_lower = (module.title or '').lower()
+    skill_lower = module.skill.name.lower()
+
+    if not answer_text:
+        return {
+            'score': 0,
+            'feedback': 'Please answer the task with a complete sentence.',
+            'correction': task['reference_answer'],
+            'explanation': task['explanation'],
+            'encouragement': 'Take another try with one clear sentence.',
+        }
+
+    if skill_lower == 'grammar':
+        if turn_number == 2:
+            expected = _normalized_compare_text(task['reference_answer'])
+            if _normalized_compare_text(answer_text) == expected:
+                return {
+                    'score': 95,
+                    'feedback': 'Excellent correction. You fixed the verb form correctly.',
+                    'correction': task['reference_answer'],
+                    'explanation': task['explanation'],
+                    'encouragement': _encouragement_for_score(95),
+                }
+            return {
+                'score': 62,
+                'feedback': f'Good try. The correct sentence is: {task["reference_answer"]}',
+                'correction': task['reference_answer'],
+                'explanation': task['explanation'],
+                'encouragement': _encouragement_for_score(62),
+            }
+
+        if 'past' in title_lower:
+            has_tense_issue = re.search(
+                r'\b(yesterday|last\s+\w+)\b[^.!?]*\b'
+                r'(go|come|eat|see|do|have|make|take)\b',
+                answer_text,
+                flags=re.IGNORECASE,
+            )
+            if has_tense_issue:
+                return {
+                    'score': 62,
+                    'feedback': 'Good attempt. Review the past tense verb in your sentence.',
+                    'correction': task['reference_answer'],
+                    'explanation': task['explanation'],
+                    'encouragement': _encouragement_for_score(62),
+                }
+        else:
+            has_agreement_issue = re.search(
+                r'\b(he|she|it)\s+(go|live|work|study|play|like|want)\b',
+                answer_text,
+                flags=re.IGNORECASE,
+            )
+            if has_agreement_issue:
+                return {
+                    'score': 60,
+                    'feedback': 'Good try. Review subject-verb agreement in the simple present tense.',
+                    'correction': task['reference_answer'],
+                    'explanation': task['explanation'],
+                    'encouragement': _encouragement_for_score(60),
+                }
+
+        score, correction, explanation, feedback = _generic_sentence_feedback(answer_text, task)
+        return {
+            'score': score,
+            'feedback': feedback,
+            'correction': correction,
+            'explanation': explanation,
+            'encouragement': _encouragement_for_score(score),
+        }
+
+    if skill_lower == 'vocabulary':
+        word_count = len(re.findall(r"[A-Za-z']+", answer_text))
+        if turn_number == 2 and re.search(r'\bgood\b', answer_lower):
+            return {
+                'score': 68,
+                'feedback': f'Good attempt. A stronger word is shown in this model answer: {task["reference_answer"]}',
+                'correction': task['reference_answer'],
+                'explanation': task['explanation'],
+                'encouragement': _encouragement_for_score(68),
+            }
+        score = 58 if word_count < 5 else 82
+        feedback = 'Use more detail and more precise words.' if score < 80 else 'You used vocabulary in a clear sentence.'
+        return {
+            'score': score,
+            'feedback': feedback,
+            'correction': answer_text if score >= 80 else task['reference_answer'],
+            'explanation': task['explanation'],
+            'encouragement': _encouragement_for_score(score),
+        }
+
+    word_count = len(re.findall(r"[A-Za-z']+", answer_text))
+    score = 55 if word_count < 5 else 78 if word_count < 9 else 88
+    feedback = 'Add more detail so your answer sounds more complete.' if score < 80 else 'Your answer is clear and appropriate for the task.'
+    return {
+        'score': score,
+        'feedback': feedback,
+        'correction': answer_text if score >= 80 else task['reference_answer'],
+        'explanation': task['explanation'],
+        'encouragement': _encouragement_for_score(score),
+    }
+
+
+def _build_final_session_feedback(module, turns):
+    scores = [int(turn.score) for turn in turns if turn.score is not None]
+    final_score = _clamp(sum(scores) / len(scores)) if scores else 0
+
+    strengths = []
+    if final_score >= 80:
+        strengths.append('You stayed consistent across the guided lesson tasks.')
+    if any(int(turn.score) >= 85 for turn in turns if turn.score is not None):
+        strengths.append('You produced at least one strong, accurate response.')
+    if not strengths:
+        strengths.append('You completed all three guided lesson tasks.')
+
+    improvement_areas = []
+    if any(int(turn.score) < 70 for turn in turns if turn.score is not None):
+        improvement_areas.append(f'Review the key pattern in {module.skill.name.lower()} before the next lesson.')
+    if module.skill.name == 'Grammar':
+        improvement_areas.append('Keep checking verb forms carefully before submitting your answer.')
+    elif module.skill.name == 'Vocabulary':
+        improvement_areas.append('Use more precise words and fuller sentences to show mastery.')
+    else:
+        improvement_areas.append('Add a little more detail to make each response stronger.')
+
+    if final_score >= 80:
+        next_study_suggestion = f'Continue with another {module.level.level_code} {module.skill.name} lesson to reinforce your progress.'
+    else:
+        next_study_suggestion = f'Review this {module.skill.name} lesson again, then continue with another {module.level.level_code} activity.'
+
+    feedback_summary = (
+        f'You completed a three-task {module.skill.name} session with a session score of {final_score}%.'
+    )
+
+    return {
+        'session_score': final_score,
+        'strengths': strengths,
+        'improvement_areas': improvement_areas,
+        'next_study_suggestion': next_study_suggestion,
+        'feedback_summary': feedback_summary,
+    }
+
+
+def _recommended_module_for_user(user):
+    recommendation = get_curriculum_recommendation(user)
+    module_data = recommendation.get('recommended_module')
+    if not module_data:
+        return None
+    return Module.objects.filter(pk=module_data['id'], is_active=True).select_related('level', 'skill').first()
+
+
+@transaction.atomic
+def start_guided_teacher_session(user, module=None):
+    if module is None:
+        module = _recommended_module_for_user(user)
+    if module is None:
+        raise ValueError('No active recommended module is available.')
+
+    lesson_text = _teacher_lesson_text(module)
+    study_session = StudySession.objects.create(
+        user=user,
+        module=module,
+        session_type='guided_teacher_session',
+    )
+    lesson_session = LessonSession.objects.create(
+        study_session=study_session,
+        lesson_text=lesson_text,
+        status='active',
+        current_turn=1,
+    )
+    return _serialize_guided_session(lesson_session)
+
+
+def get_guided_teacher_session_state(user, lesson_session):
+    if lesson_session.study_session.user_id != user.id:
+        raise LessonSession.DoesNotExist
+    return _serialize_guided_session(lesson_session)
+
+
+@transaction.atomic
+def answer_guided_teacher_session(user, lesson_session, answer):
+    if lesson_session.study_session.user_id != user.id:
+        raise LessonSession.DoesNotExist
+    if lesson_session.status == 'completed':
+        raise ValueError('This lesson session is already complete.')
+
+    answer_text = answer.strip()
+    turn_number = lesson_session.current_turn
+    task = _teacher_tasks_for_module(lesson_session.study_session.module)[turn_number - 1]
+    evaluation = _evaluate_task_fallback(
+        lesson_session.study_session.module,
+        turn_number,
+        answer_text,
+    )
+    turn = LessonTurn.objects.create(
+        session=lesson_session,
+        turn_number=turn_number,
+        teacher_task=task['teacher_task'],
+        student_answer=answer_text,
+        ai_feedback=evaluation['feedback'],
+        correction=evaluation['correction'],
+        explanation=evaluation['explanation'],
+        encouragement=evaluation['encouragement'],
+        score=Decimal(evaluation['score']),
+    )
+
+    lesson_session.study_session.input_text = '\n'.join(
+        lesson_session.turns.exclude(student_answer='').values_list('student_answer', flat=True)
+    )
+
+    response = {
+        'session_id': lesson_session.id,
+        'turn': _serialize_lesson_turn(turn),
+        'completed': False,
+        'next_task': None,
+        'final_result': None,
+    }
+
+    if turn_number >= GUIDED_SESSION_TOTAL_TURNS:
+        lesson_session.status = 'completed'
+        lesson_session.completed_at = timezone.now()
+        final_summary = _build_final_session_feedback(
+            lesson_session.study_session.module,
+            list(lesson_session.turns.all()),
+        )
+        final_score = final_summary['session_score']
+        lesson_session.final_score = Decimal(final_score)
+        lesson_session.feedback_summary = final_summary
+        lesson_session.study_session.ai_feedback = final_summary['feedback_summary']
+        lesson_session.study_session.score = Decimal(final_score)
+        lesson_session.study_session.completed_at = lesson_session.completed_at
+        response['completed'] = True
+        response['final_result'] = {
+            'session_score': final_score,
+            'strengths': final_summary['strengths'],
+            'improvement_areas': final_summary['improvement_areas'],
+            'next_study_suggestion': final_summary['next_study_suggestion'],
+            'feedback_summary': final_summary['feedback_summary'],
+        }
+    else:
+        lesson_session.current_turn = turn_number + 1
+        next_task = _teacher_tasks_for_module(lesson_session.study_session.module)[lesson_session.current_turn - 1]
+        response['next_task'] = {
+            'turn_number': lesson_session.current_turn,
+            'teacher_task': next_task['teacher_task'],
+        }
+
+    lesson_session.study_session.save(
+        update_fields=[
+            'input_text',
+            'ai_feedback',
+            'score',
+            'completed_at',
+        ]
+    )
+    lesson_session.save(
+        update_fields=[
+            'status',
+            'current_turn',
+            'final_score',
+            'feedback_summary',
+            'completed_at',
+        ]
+    )
+    return response
 
 
 def generate_teacher_feedback(answer):
@@ -1179,62 +1891,42 @@ def generate_teacher_feedback(answer):
 
 @transaction.atomic
 def submit_teacher_feedback(user, session, answer):
-    llm_feedback = _teacher_feedback_from_llm(session.module, answer)
-    if llm_feedback is None:
-        score, feedback = generate_teacher_feedback(answer)
-    else:
-        score, feedback = llm_feedback
+    lesson_session = getattr(session, 'lesson_session', None)
+    if lesson_session is None:
+        lesson_session = LessonSession.objects.create(
+            study_session=session,
+            status='active',
+            current_turn=1,
+        )
 
-    session.input_text = answer.strip()
-    session.ai_feedback = feedback
-    session.score = Decimal(score)
-    session.completed_at = timezone.now()
-    session.save(
-        update_fields=[
-            'input_text',
-            'ai_feedback',
-            'score',
-            'completed_at',
-        ]
-    )
-
-    mastery, _ = SkillMastery.objects.update_or_create(
-        user=user,
-        skill=session.module.skill,
-        defaults={
-            'level_code': session.module.level.level_code,
-            'score': Decimal(score),
-            'status': _status_for_score(score),
-        },
-    )
-    return {
-        'score': score,
-        'feedback': feedback,
-        'updated_mastery': {
-            'skill': mastery.skill.name,
-            'score': int(mastery.score),
-            'status': mastery.status,
-        },
+    result = answer_guided_teacher_session(user, lesson_session, answer)
+    feedback = result['turn']
+    payload = {
+        'session_score': feedback['score'],
+        'feedback': feedback['feedback'],
+        'correction': feedback['correction'],
+        'explanation': feedback['explanation'],
+        'encouragement': feedback['encouragement'],
+        'completed': result['completed'],
+        'next_task': result['next_task'],
+        'final_result': result['final_result'],
     }
+    return payload
 
 
 @transaction.atomic
 def generate_study_plan(user):
-    masteries = list(
-        SkillMastery.objects.filter(user=user)
-        .select_related('skill')
-        .order_by('score', 'skill__name')[:2]
-    )
-    focus = [mastery.skill.name for mastery in masteries]
-    if not focus:
-        focus = list(
-            Skill.objects.order_by('id').values_list('name', flat=True)[:2]
-        )
+    focus = _study_plan_focus_skills(user)
+    items = _build_study_plan_items(user, focus)
     days = [
-        f'Day {index}: Practice {skill_name}'
-        for index, skill_name in enumerate(focus, start=1)
+        f"{item['day']}: {item['title']}"
+        for item in items
     ]
-    plan_data = {'focus': focus, 'days': days}
+    plan_data = {
+        'focus': focus,
+        'days': days,
+        'items': items,
+    }
     start_date = timezone.localdate()
     StudyPlan.objects.create(
         user=user,
@@ -1247,48 +1939,17 @@ def generate_study_plan(user):
 
 
 def get_coach_summary(user):
-    profile, _ = LearnerProfile.objects.get_or_create(user=user)
-    weakest = (
-        SkillMastery.objects.filter(user=user)
-        .select_related('skill')
-        .order_by('score', 'skill__name')
-        .first()
-    )
-    recent_sessions = StudySession.objects.filter(
-        user=user,
-        completed_at__isnull=False,
-    ).order_by('-completed_at')[:5]
-    completed_count = len(recent_sessions)
-
-    llm_summary = _coach_summary_from_llm(
-        profile.current_level,
-        weakest,
-        completed_count,
-    )
-    if llm_summary is not None:
-        return llm_summary
-
-    if weakest:
-        if completed_count:
-            summary = (
-                f'You are improving, but {weakest.skill.name} needs more review.'
-            )
-        else:
-            summary = (
-                f'{weakest.skill.name} needs more review. '
-                'Complete a lesson to begin tracking progress.'
-            )
-    else:
-        summary = 'Complete the diagnostic to start tracking your progress.'
+    focus = _study_plan_focus_skills(user)
+    if not focus:
+        return {
+            'summary': 'Complete the diagnostic to start tracking your progress.',
+            'next_step': 'Start with the diagnostic, then generate a weekly plan.',
+        }
 
     return {
-        'summary': summary,
-        'next_step': 'Complete your recommended module.',
+        'summary': f'Your focus this week is {_join_with_and(focus)}.',
+        'next_step': (
+            'Complete the recommended lessons, then retake your diagnostic '
+            'to update your official mastery.'
+        ),
     }
-
-
-
-
-
-
-

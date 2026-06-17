@@ -3,15 +3,19 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from agents.models import LessonSession
 from learning.models import Module, StudySession
 from xiavlearn.api import success_response
 
 from .services import (
+    answer_guided_teacher_session,
     create_teacher_session,
     evaluate_diagnostic,
     generate_study_plan,
+    get_guided_teacher_session_state,
     get_coach_summary,
     get_curriculum_recommendation,
+    start_guided_teacher_session,
     submit_teacher_feedback,
 )
 
@@ -81,6 +85,118 @@ class TeacherSessionView(APIView):
         )
 
 
+class TeacherSessionStartView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        module_id = request.data.get('module_id')
+        module = None
+        if module_id is not None:
+            if not isinstance(module_id, int):
+                return Response(
+                    {
+                        'success': False,
+                        'error': 'module_id must be an integer when provided.',
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            module = get_object_or_404(Module, pk=module_id, is_active=True)
+
+        try:
+            session_data = start_guided_teacher_session(request.user, module)
+        except ValueError as exc:
+            return Response(
+                {
+                    'success': False,
+                    'error': str(exc),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return success_response(
+            session_data,
+            'Guided teacher session started.',
+            status.HTTP_201_CREATED,
+        )
+
+
+class TeacherSessionAnswerView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        session_id = request.data.get('session_id')
+        answer = request.data.get('student_answer')
+        if not isinstance(session_id, int):
+            return Response(
+                {
+                    'success': False,
+                    'error': 'session_id must be an integer.',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not isinstance(answer, str) or not answer.strip():
+            return Response(
+                {
+                    'success': False,
+                    'error': 'student_answer must be a non-empty string.',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        lesson_session = get_object_or_404(
+            LessonSession.objects.select_related(
+                'study_session__module__skill',
+                'study_session__module__level',
+                'study_session__user',
+            ),
+            pk=session_id,
+            study_session__user=request.user,
+        )
+        try:
+            result = answer_guided_teacher_session(
+                request.user,
+                lesson_session,
+                answer,
+            )
+        except ValueError as exc:
+            return Response(
+                {
+                    'success': False,
+                    'error': str(exc),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return success_response(
+            result,
+            'Teacher session answer evaluated.',
+        )
+
+
+class TeacherSessionDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, session_id):
+        lesson_session = get_object_or_404(
+            LessonSession.objects.select_related(
+                'study_session__module__skill',
+                'study_session__module__level',
+                'study_session__user',
+            ).prefetch_related('turns'),
+            pk=session_id,
+            study_session__user=request.user,
+        )
+        session_data = get_guided_teacher_session_state(
+            request.user,
+            lesson_session,
+        )
+
+        return success_response(
+            session_data,
+            'Teacher session loaded.',
+        )
+
+
 class TeacherFeedbackView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -111,7 +227,7 @@ class TeacherFeedbackView(APIView):
         )
         return success_response(
             submit_teacher_feedback(request.user, session, answer),
-            'Teacher feedback generated and progress updated.',
+            'Teacher feedback generated for this practice session.',
         )
 
 

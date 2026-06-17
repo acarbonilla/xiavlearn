@@ -10,6 +10,7 @@ from django.db import transaction
 from learning.models import Skill, SkillMastery
 
 from .llm_client import call_llm_json
+from .services import recalculate_learner_level
 
 
 PRONUNCIATION_TARGET_SENTENCE = (
@@ -316,6 +317,7 @@ def evaluate_pronunciation(user, audio_file, target_sentence):
             'status': status,
         },
     )
+    recalculate_learner_level(user)
 
     return {
         'target_sentence': target_sentence,
@@ -366,6 +368,7 @@ def evaluate_listening(user, question, expected_answer, user_answer):
             'status': status,
         },
     )
+    recalculate_learner_level(user)
 
     return {
         'score': score,
@@ -399,6 +402,7 @@ def evaluate_speaking(user, audio_file, question):
             'status': status,
         },
     )
+    recalculate_learner_level(user)
 
     return {
         'question': question,
