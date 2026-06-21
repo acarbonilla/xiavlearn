@@ -101,6 +101,132 @@ SPELLING_HINTS = {
     'gola': 'goal',
 }
 GUIDED_SESSION_TOTAL_TURNS = 3
+SPEAKING_TEACHER_SKILL = 'Speaking'
+SPEAKING_TEACHER_SESSION_TYPE = 'speaking_teacher_session'
+SPEAKING_PRACTICE_SCORE_LABEL = 'Practice Score'
+SPEAKING_FILLER_WORDS = {'um', 'uh', 'like', 'actually', 'basically'}
+SPEAKING_TEACHER_TASKS = {
+    'A1': [
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Introduce yourself and say what you do each day.',
+            'target_focus': 'basic personal information in complete sentences',
+            'keywords': ['name', 'live', 'from', 'work', 'study', 'day', 'daily'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Describe your daily routine from morning to evening.',
+            'target_focus': 'simple sequence words like first, then, and after',
+            'keywords': ['morning', 'afternoon', 'evening', 'first', 'then', 'after', 'day'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Answer this personal question: what do you enjoy doing after work or school?',
+            'target_focus': 'one clear preference with a simple reason',
+            'keywords': ['enjoy', 'like', 'after', 'work', 'school', 'because', 'relax'],
+        },
+    ],
+    'A2': [
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Describe what you did yesterday and mention one result.',
+            'target_focus': 'past tense with one clear result using because or so',
+            'keywords': ['yesterday', 'went', 'worked', 'studied', 'did', 'because', 'so'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Talk about something you like or dislike and explain why.',
+            'target_focus': 'preference language with because',
+            'keywords': ['like', 'dislike', 'enjoy', 'prefer', 'because', 'reason'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Describe a simple situation at work or school and how you handled it.',
+            'target_focus': 'clear situation, action, and result',
+            'keywords': ['work', 'school', 'problem', 'task', 'handled', 'helped', 'finished'],
+        },
+    ],
+    'B1': [
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Tell me about a problem you solved and explain the solution.',
+            'target_focus': 'clear explanation with because, so, or although',
+            'keywords': ['problem', 'solved', 'solution', 'because', 'so', 'although', 'result'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Explain one English learning goal and the steps you are taking.',
+            'target_focus': 'goal, steps, and reason in a connected response',
+            'keywords': ['goal', 'english', 'improve', 'practice', 'plan', 'because', 'steps'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Give an opinion about an effective way to learn English and support it with reasons.',
+            'target_focus': 'opinion language with two supporting reasons',
+            'keywords': ['opinion', 'english', 'learn', 'effective', 'because', 'reason', 'practice'],
+        },
+    ],
+    'B2': [
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Explain a workplace or technical process that you know well.',
+            'target_focus': 'organized explanation using sequence and cause-and-effect language',
+            'keywords': ['process', 'system', 'first', 'then', 'after', 'because', 'result'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Compare two options for solving a problem and say which one you would choose.',
+            'target_focus': 'comparison language with supporting reasons',
+            'keywords': ['compare', 'option', 'better', 'however', 'because', 'choose', 'solution'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Explain the tradeoffs in an important decision and give your recommendation.',
+            'target_focus': 'balanced reasoning with a clear recommendation',
+            'keywords': ['tradeoff', 'decision', 'advantage', 'disadvantage', 'recommend', 'because'],
+        },
+    ],
+    'C1': [
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Defend a viewpoint on a professional or social topic.',
+            'target_focus': 'structured argument with clear support and contrast',
+            'keywords': ['viewpoint', 'argument', 'however', 'although', 'evidence', 'reason'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Summarize a complex issue and explain the main challenge.',
+            'target_focus': 'precise summary with one main challenge and implication',
+            'keywords': ['issue', 'challenge', 'summary', 'main', 'impact', 'complex'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Present a structured recommendation for improving a team or process.',
+            'target_focus': 'clear recommendation with justification and expected result',
+            'keywords': ['recommendation', 'improve', 'process', 'team', 'result', 'reason'],
+        },
+    ],
+    'C2': [
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Give a nuanced explanation of a difficult communication problem.',
+            'target_focus': 'nuance, contrast, and precise reasoning',
+            'keywords': ['nuanced', 'communication', 'problem', 'however', 'context', 'reasoning'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Respond to a professional discussion prompt with a persuasive viewpoint.',
+            'target_focus': 'persuasive structure with sophisticated support',
+            'keywords': ['professional', 'persuasive', 'viewpoint', 'evidence', 'support', 'recommend'],
+        },
+        {
+            'task_type': 'spoken_response',
+            'teacher_prompt': 'Give an abstract or persuasive response that balances multiple perspectives.',
+            'target_focus': 'multiple perspectives with a strong final position',
+            'keywords': ['perspective', 'balance', 'abstract', 'position', 'however', 'therefore'],
+        },
+    ],
+}
 
 
 def _clamp(value, minimum=0, maximum=100):
@@ -1239,6 +1365,508 @@ def _normalized_cefr_level(level_code, default='A1'):
     return default
 
 
+def _official_speaking_mastery_snapshot(user):
+    mastery = (
+        SkillMastery.objects.filter(user=user, skill__name=SPEAKING_TEACHER_SKILL)
+        .select_related('skill')
+        .first()
+    )
+    fallback_level = (
+        LearnerProfile.objects.filter(user=user)
+        .values_list('current_level', flat=True)
+        .first()
+    )
+    fallback_level = _normalized_cefr_level(fallback_level, default='A1')
+    if mastery is None:
+        return {
+            'official_mastery_assessed': False,
+            'official_mastery_score': 0,
+            'official_mastery_level': fallback_level,
+        }
+    return {
+        'official_mastery_assessed': True,
+        'official_mastery_score': int(mastery.score),
+        'official_mastery_level': _normalized_cefr_level(
+            mastery.level_code,
+            default=fallback_level,
+        ),
+    }
+
+
+def _speaking_tasks_for_level(level_code):
+    normalized_level = _normalized_cefr_level(level_code, default='A1')
+    tasks = SPEAKING_TEACHER_TASKS.get(normalized_level, SPEAKING_TEACHER_TASKS['A1'])
+    return [
+        {
+            **task,
+            'turn_number': index + 1,
+        }
+        for index, task in enumerate(tasks)
+    ]
+
+
+def _speaking_session_intro(level_code):
+    return (
+        f'This Speaking Teacher Session uses three {level_code} speaking tasks '
+        'for practice only. It does not change your official mastery.'
+    )
+
+
+def _build_speaking_session_context(user):
+    snapshot = _official_speaking_mastery_snapshot(user)
+    level_code = snapshot['official_mastery_level']
+    return {
+        **snapshot,
+        'skill': SPEAKING_TEACHER_SKILL,
+        'tasks': _speaking_tasks_for_level(level_code),
+        'total_turns': GUIDED_SESSION_TOTAL_TURNS,
+    }
+
+
+def _speaking_session_tasks(lesson_session):
+    return (lesson_session.session_context or {}).get('tasks', [])
+
+
+def _current_speaking_task(lesson_session):
+    tasks = _speaking_session_tasks(lesson_session)
+    turn_index = max(lesson_session.current_turn - 1, 0)
+    if turn_index >= len(tasks):
+        return None
+    return tasks[turn_index]
+
+
+def _speaking_words(text):
+    return re.findall(r"[a-z0-9']+", (text or '').lower())
+
+
+def _speaking_unique_content_words(words):
+    return {
+        word
+        for word in words
+        if len(word) > 2 and word not in COMMON_WORDS and word not in SPEAKING_FILLER_WORDS
+    }
+
+
+def _speaking_relevance_score(task, transcript):
+    words = _speaking_words(transcript)
+    if not words:
+        return 0
+
+    unique_words = set(words)
+    keywords = set(task.get('keywords', []))
+    matched_keywords = len(unique_words & keywords)
+    word_count = len(words)
+    score = 18
+
+    if matched_keywords:
+        score += min(matched_keywords * 18, 54)
+    elif word_count >= 10:
+        score += 20
+
+    if any(linker in unique_words for linker in {'because', 'so', 'although', 'however', 'therefore'}):
+        score += 10
+
+    if word_count >= 12:
+        score += 10
+    elif word_count >= 8:
+        score += 6
+
+    if matched_keywords == 0:
+        score = min(score, 55)
+    return _clamp(score)
+
+
+def _speaking_clarity_score(transcript):
+    words = _speaking_words(transcript)
+    word_count = len(words)
+    if not word_count:
+        return 0
+
+    score = 35
+    if word_count >= 8:
+        score += 20
+    if word_count >= 14:
+        score += 15
+
+    sentences = re.split(r'[.!?]+', transcript)
+    complete_sentences = len([sentence for sentence in sentences if _normalize_text(sentence)])
+    if complete_sentences >= 1:
+        score += 15
+    if complete_sentences >= 2:
+        score += 10
+
+    if re.search(r"\b(i am|i'm|because|so|then|after|however|although)\b", transcript, flags=re.IGNORECASE):
+        score += 10
+    return _clamp(score)
+
+
+def _speaking_grammar_score(transcript):
+    words = _speaking_words(transcript)
+    if not words:
+        return 0
+
+    score = 82
+    penalties = [
+        (r'\b(he|she|it)\s+(go|live|work|study|play|like|want)\b', 18),
+        (r'\bi\s+go\b[^.!?]*\b(yesterday|last)\b', 18),
+        (r'\b(yesterday|last\s+\w+)\b[^.!?]*\b(go|do|have|make|take)\b', 12),
+        (r'\bthere\s+is\s+\w+\s+people\b', 12),
+        (r'\bmy\s+english\s+improve\b', 10),
+    ]
+    for pattern, penalty in penalties:
+        if re.search(pattern, transcript, flags=re.IGNORECASE):
+            score -= penalty
+
+    if transcript and transcript.strip() and transcript.strip()[-1] not in '.!?':
+        score -= 4
+    return _clamp(score)
+
+
+def _speaking_vocabulary_score(transcript):
+    words = _speaking_words(transcript)
+    if not words:
+        return 0
+
+    content_words = _speaking_unique_content_words(words)
+    score = 28 + min(len(content_words) * 6, 42)
+    if any(
+        linker in words
+        for linker in ['because', 'although', 'however', 'therefore', 'while', 'instead']
+    ):
+        score += 15
+    return _clamp(score)
+
+
+def _speaking_completeness_score(task, transcript):
+    words = _speaking_words(transcript)
+    word_count = len(words)
+    if not word_count:
+        return 0
+
+    score = 20
+    if word_count >= 6:
+        score += 20
+    if word_count >= 12:
+        score += 20
+    if word_count >= 18:
+        score += 15
+
+    keywords = set(task.get('keywords', []))
+    matched_keywords = len(set(words) & keywords)
+    score += min(matched_keywords * 6, 20)
+    return _clamp(score)
+
+
+def _speaking_coherence_score(transcript):
+    words = _speaking_words(transcript)
+    if not words:
+        return 0
+
+    score = 30
+    connectors = ['because', 'so', 'then', 'after', 'first', 'however', 'although', 'therefore']
+    connector_count = sum(1 for connector in connectors if connector in words)
+    score += min(connector_count * 15, 45)
+
+    if len(words) >= 12:
+        score += 15
+    if len(re.split(r'[.!?]+', transcript)) >= 2:
+        score += 10
+    return _clamp(score)
+
+
+def _speaking_fluency_signal_score(transcript):
+    words = _speaking_words(transcript)
+    if not words:
+        return 0
+
+    score = 78
+    fillers = sum(1 for word in words if word in SPEAKING_FILLER_WORDS)
+    repeated_pairs = sum(
+        1
+        for index in range(1, len(words))
+        if words[index] == words[index - 1]
+    )
+    score -= min(fillers * 8, 24)
+    score -= min(repeated_pairs * 10, 20)
+    if len(words) < 6:
+        score -= 20
+    return _clamp(score)
+
+
+def _apply_basic_speaking_correction(transcript):
+    corrected = re.sub(r'\s+', ' ', (transcript or '').strip())
+    if not corrected:
+        return ''
+
+    for typo, suggestion in SPELLING_HINTS.items():
+        corrected = re.sub(rf'\b{re.escape(typo)}\b', suggestion, corrected, flags=re.IGNORECASE)
+
+    corrected = re.sub(r'\bi\b', 'I', corrected)
+    corrected = re.sub(r"\bi'm\b", "I'm", corrected, flags=re.IGNORECASE)
+    corrected = corrected[0].upper() + corrected[1:]
+    if corrected[-1] not in '.!?':
+        corrected += '.'
+    return corrected
+
+
+def _build_speaking_turn_feedback(task, transcript, breakdown):
+    score = breakdown['score']
+    weakest_dimension = min(
+        (
+            'relevance',
+            'clarity',
+            'grammar',
+            'vocabulary',
+            'completeness',
+            'coherence',
+            'fluency_signal',
+        ),
+        key=lambda key: breakdown[key],
+    )
+    correction = _apply_basic_speaking_correction(transcript)
+
+    if score >= 85:
+        feedback = 'Strong answer. You responded clearly, completely, and with good control.'
+    elif score >= 75:
+        feedback = 'Good answer. You explained your ideas clearly with mostly accurate English.'
+    elif score >= 60:
+        feedback = 'Good attempt. Your answer is relevant, but add more detail and smoother organization.'
+    elif score >= 40:
+        feedback = 'You answered part of the task, but the response needs more detail and clearer language.'
+    else:
+        feedback = 'Your answer did not yet address the task clearly. Try again with one complete idea.'
+
+    if weakest_dimension == 'relevance':
+        explanation = 'Stay closer to the speaking prompt and include the main idea the teacher asked for.'
+    elif weakest_dimension == 'grammar':
+        explanation = 'Check verb tense and subject-verb agreement so your meaning stays accurate.'
+    elif weakest_dimension == 'vocabulary':
+        explanation = 'Add more precise vocabulary instead of repeating the same simple words.'
+    elif weakest_dimension == 'completeness':
+        explanation = 'Add one more supporting detail so your answer feels complete.'
+    elif weakest_dimension == 'coherence':
+        explanation = 'Use linking words like because, so, however, or although to organize your response.'
+    elif weakest_dimension == 'fluency_signal':
+        explanation = 'Reduce fillers and repeated words so the response sounds smoother.'
+    else:
+        explanation = f'Focus on {task["target_focus"]} to make your answer easier to follow.'
+
+    return {
+        'feedback': feedback,
+        'correction': correction or 'Please try the task again with a complete spoken answer.',
+        'explanation': explanation,
+        'encouragement': _encouragement_for_score(score),
+    }
+
+
+def _evaluate_speaking_teacher_answer(task, transcript):
+    normalized_transcript = _normalize_text(transcript) or ''
+    if not normalized_transcript:
+        empty_breakdown = {
+            'relevance': 0,
+            'clarity': 0,
+            'grammar': 0,
+            'vocabulary': 0,
+            'completeness': 0,
+            'coherence': 0,
+            'fluency_signal': 0,
+            'score': 0,
+        }
+        feedback = _build_speaking_turn_feedback(task, normalized_transcript, empty_breakdown)
+        return {
+            'score': 0,
+            'evaluation_breakdown': empty_breakdown,
+            **feedback,
+        }
+
+    breakdown = {
+        'relevance': _speaking_relevance_score(task, normalized_transcript),
+        'clarity': _speaking_clarity_score(normalized_transcript),
+        'grammar': _speaking_grammar_score(normalized_transcript),
+        'vocabulary': _speaking_vocabulary_score(normalized_transcript),
+        'completeness': _speaking_completeness_score(task, normalized_transcript),
+        'coherence': _speaking_coherence_score(normalized_transcript),
+        'fluency_signal': _speaking_fluency_signal_score(normalized_transcript),
+    }
+    score = _clamp(
+        breakdown['relevance'] * 0.25
+        + breakdown['clarity'] * 0.15
+        + breakdown['grammar'] * 0.20
+        + breakdown['vocabulary'] * 0.15
+        + breakdown['completeness'] * 0.15
+        + breakdown['coherence'] * 0.05
+        + breakdown['fluency_signal'] * 0.05
+    )
+    breakdown['score'] = score
+    feedback = _build_speaking_turn_feedback(task, normalized_transcript, breakdown)
+    return {
+        'score': score,
+        'evaluation_breakdown': breakdown,
+        **feedback,
+    }
+
+
+def _serialize_speaking_current_task(task):
+    if task is None:
+        return None
+    return {
+        'turn_number': task['turn_number'],
+        'task_type': task['task_type'],
+        'teacher_prompt': task['teacher_prompt'],
+        'target_focus': task['target_focus'],
+    }
+
+
+def _serialize_speaking_next_task(task):
+    if task is None:
+        return None
+    return {
+        'turn_number': task['turn_number'],
+        'teacher_task': task['teacher_prompt'],
+        'target_focus': task['target_focus'],
+    }
+
+
+def _serialize_speaking_teacher_turn(turn):
+    return {
+        'turn_number': turn.turn_number,
+        'task_type': turn.task_type,
+        'target_focus': turn.target_focus,
+        'teacher_task': turn.teacher_task,
+        'transcript': turn.student_answer,
+        'score': int(turn.score) if turn.score is not None else None,
+        'feedback': turn.ai_feedback,
+        'correction': turn.correction,
+        'explanation': turn.explanation,
+        'encouragement': turn.encouragement,
+        'evaluation_breakdown': turn.evaluation_breakdown or {},
+    }
+
+
+def _build_speaking_final_result(lesson_session):
+    turns = list(lesson_session.turns.all())
+    scores = [int(turn.score) for turn in turns if turn.score is not None]
+    practice_score = _clamp(sum(scores) / len(scores)) if scores else 0
+
+    dimension_totals = {
+        'relevance': [],
+        'clarity': [],
+        'grammar': [],
+        'vocabulary': [],
+        'completeness': [],
+        'coherence': [],
+        'fluency_signal': [],
+    }
+    for turn in turns:
+        breakdown = turn.evaluation_breakdown or {}
+        for key in dimension_totals:
+            if isinstance(breakdown.get(key), (int, float)):
+                dimension_totals[key].append(int(breakdown[key]))
+
+    dimension_averages = {
+        key: _clamp(sum(values) / len(values)) if values else 0
+        for key, values in dimension_totals.items()
+    }
+    sorted_dimensions = sorted(
+        dimension_averages.items(),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+    summary_lookup = {
+        'relevance': 'You stayed focused on the teacher prompts.',
+        'clarity': 'You explained your ideas clearly.',
+        'grammar': 'Your grammar stayed mostly accurate across the session.',
+        'vocabulary': 'You used a solid range of speaking vocabulary.',
+        'completeness': 'You gave complete answers with supporting details.',
+        'coherence': 'You organized your ideas well from start to finish.',
+        'fluency_signal': 'Your responses sounded smoother with fewer repeated fillers.',
+    }
+    improvement_lookup = {
+        'relevance': 'Stay closer to the exact task before adding extra details.',
+        'clarity': 'Make each main point clearer before moving to the next idea.',
+        'grammar': 'Review tense control and agreement in longer spoken answers.',
+        'vocabulary': 'Add more precise words instead of repeating simple vocabulary.',
+        'completeness': 'Add one more supporting detail to complete each answer.',
+        'coherence': 'Use more linking words to connect your ideas smoothly.',
+        'fluency_signal': 'Reduce fillers and repeated words to improve fluency.',
+    }
+
+    strengths = []
+    for key, value in sorted_dimensions:
+        if value >= 75 and len(strengths) < 2:
+            strengths.append(summary_lookup[key])
+    if not strengths:
+        strengths.append('You completed all three speaking practice turns.')
+
+    improvement_areas = []
+    for key, value in reversed(sorted_dimensions):
+        if value < 75 and len(improvement_areas) < 2:
+            improvement_areas.append(improvement_lookup[key])
+    if not improvement_areas:
+        improvement_areas.append('Keep practicing to make your speaking even more natural and detailed.')
+
+    official_level = (lesson_session.session_context or {}).get('official_mastery_level', 'A1')
+    return {
+        'practice_score': practice_score,
+        'label': SPEAKING_PRACTICE_SCORE_LABEL,
+        'strengths': strengths,
+        'improvement_areas': improvement_areas,
+        'next_suggestion': (
+            f'Practice one more {official_level} speaking session, then retake '
+            'the Speaking Diagnostic when ready.'
+        ),
+        'feedback_summary': (
+            f'You completed a three-turn speaking practice session with a '
+            f'{SPEAKING_PRACTICE_SCORE_LABEL.lower()} of {practice_score}%.'
+        ),
+    }
+
+
+def _serialize_speaking_teacher_session(lesson_session):
+    context = lesson_session.session_context or {}
+    turns = [
+        _serialize_speaking_teacher_turn(turn)
+        for turn in lesson_session.turns.all()
+    ]
+    final_result = None
+    if lesson_session.status == 'completed':
+        summary = lesson_session.feedback_summary or {}
+        final_result = {
+            'practice_score': (
+                summary.get('practice_score')
+                if summary.get('practice_score') is not None
+                else int(lesson_session.final_score) if lesson_session.final_score is not None else None
+            ),
+            'label': summary.get('label', SPEAKING_PRACTICE_SCORE_LABEL),
+            'strengths': summary.get('strengths', []),
+            'improvement_areas': summary.get('improvement_areas', []),
+            'next_suggestion': summary.get('next_suggestion', ''),
+            'feedback_summary': summary.get('feedback_summary', ''),
+        }
+
+    return {
+        'session_id': lesson_session.id,
+        'study_session_id': lesson_session.study_session_id,
+        'session_mode': lesson_session.session_mode,
+        'skill': context.get('skill', SPEAKING_TEACHER_SKILL),
+        'official_mastery_assessed': context.get('official_mastery_assessed', False),
+        'official_mastery_score': context.get('official_mastery_score', 0),
+        'official_mastery_level': context.get('official_mastery_level', 'A1'),
+        'status': lesson_session.status,
+        'current_turn': lesson_session.current_turn,
+        'total_turns': context.get('total_turns', GUIDED_SESSION_TOTAL_TURNS),
+        'lesson': lesson_session.lesson_text,
+        'turns': turns,
+        'current_task': (
+            _serialize_speaking_current_task(_current_speaking_task(lesson_session))
+            if lesson_session.status != 'completed'
+            else None
+        ),
+        'final_result': final_result,
+    }
+
+
 def _module_selection_result(module, learner_level, fallback_used=False, fallback_reason=None):
     return {
         'module': module,
@@ -2099,6 +2727,7 @@ def start_guided_teacher_session(user, module=None):
     lesson_session = LessonSession.objects.create(
         study_session=study_session,
         lesson_text=lesson_text,
+        session_mode=LessonSession.SESSION_MODE_TEXT,
         status='active',
         current_turn=1,
     )
@@ -2109,6 +2738,127 @@ def get_guided_teacher_session_state(user, lesson_session):
     if lesson_session.study_session.user_id != user.id:
         raise LessonSession.DoesNotExist
     return _serialize_guided_session(lesson_session)
+
+
+@transaction.atomic
+def start_speaking_teacher_session(user):
+    session_context = _build_speaking_session_context(user)
+    lesson_session = LessonSession.objects.create(
+        study_session=StudySession.objects.create(
+            user=user,
+            session_type=SPEAKING_TEACHER_SESSION_TYPE,
+        ),
+        lesson_text=_speaking_session_intro(session_context['official_mastery_level']),
+        session_mode=LessonSession.SESSION_MODE_SPEAKING,
+        session_context=session_context,
+        status='active',
+        current_turn=1,
+    )
+    return _serialize_speaking_teacher_session(lesson_session)
+
+
+def get_speaking_teacher_session_state(user, lesson_session):
+    if lesson_session.study_session.user_id != user.id:
+        raise LessonSession.DoesNotExist
+    if lesson_session.session_mode != LessonSession.SESSION_MODE_SPEAKING:
+        raise LessonSession.DoesNotExist
+    return _serialize_speaking_teacher_session(lesson_session)
+
+
+@transaction.atomic
+def answer_speaking_teacher_session(
+    user,
+    lesson_session,
+    transcript=None,
+    audio_file=None,
+):
+    if lesson_session.study_session.user_id != user.id:
+        raise LessonSession.DoesNotExist
+    if lesson_session.session_mode != LessonSession.SESSION_MODE_SPEAKING:
+        raise LessonSession.DoesNotExist
+    if lesson_session.status == 'completed':
+        raise ValueError('This speaking teacher session is already complete.')
+
+    transcript_text = _normalize_text(transcript)
+    if transcript_text is None:
+        if audio_file is None:
+            raise ValueError('Provide a transcript or audio_file.')
+        from .voice_services import transcribe_audio
+
+        transcript_text = transcribe_audio(audio_file)
+
+    task = _current_speaking_task(lesson_session)
+    if task is None:
+        raise ValueError('This speaking teacher session has no remaining task.')
+
+    evaluation = _evaluate_speaking_teacher_answer(task, transcript_text)
+    turn_number = lesson_session.current_turn
+    turn = LessonTurn.objects.create(
+        session=lesson_session,
+        turn_number=turn_number,
+        task_type=task['task_type'],
+        target_focus=task['target_focus'],
+        teacher_task=task['teacher_prompt'],
+        student_answer=transcript_text,
+        ai_feedback=evaluation['feedback'],
+        correction=evaluation['correction'],
+        explanation=evaluation['explanation'],
+        encouragement=evaluation['encouragement'],
+        score=Decimal(evaluation['score']),
+        evaluation_breakdown=evaluation['evaluation_breakdown'],
+    )
+
+    lesson_session.study_session.input_text = '\n'.join(
+        lesson_session.turns.exclude(student_answer='').values_list('student_answer', flat=True)
+    )
+
+    response = {
+        'session_id': lesson_session.id,
+        'turn': _serialize_speaking_teacher_turn(turn),
+        'completed': False,
+        'next_task': None,
+        'final_result': None,
+    }
+
+    total_turns = (lesson_session.session_context or {}).get(
+        'total_turns',
+        GUIDED_SESSION_TOTAL_TURNS,
+    )
+    if turn_number >= total_turns:
+        lesson_session.status = 'completed'
+        lesson_session.completed_at = timezone.now()
+        final_result = _build_speaking_final_result(lesson_session)
+        lesson_session.final_score = Decimal(final_result['practice_score'])
+        lesson_session.feedback_summary = final_result
+        lesson_session.study_session.ai_feedback = final_result['feedback_summary']
+        lesson_session.study_session.score = Decimal(final_result['practice_score'])
+        lesson_session.study_session.completed_at = lesson_session.completed_at
+        response['completed'] = True
+        response['final_result'] = final_result
+    else:
+        lesson_session.current_turn = turn_number + 1
+        response['next_task'] = _serialize_speaking_next_task(
+            _current_speaking_task(lesson_session)
+        )
+
+    lesson_session.study_session.save(
+        update_fields=[
+            'input_text',
+            'ai_feedback',
+            'score',
+            'completed_at',
+        ]
+    )
+    lesson_session.save(
+        update_fields=[
+            'status',
+            'current_turn',
+            'final_score',
+            'feedback_summary',
+            'completed_at',
+        ]
+    )
+    return response
 
 
 @transaction.atomic
@@ -2129,6 +2879,7 @@ def answer_guided_teacher_session(user, lesson_session, answer):
     turn = LessonTurn.objects.create(
         session=lesson_session,
         turn_number=turn_number,
+        task_type=task.get('task_type', ''),
         teacher_task=task['teacher_task'],
         student_answer=answer_text,
         ai_feedback=evaluation['feedback'],
@@ -2232,6 +2983,7 @@ def submit_teacher_feedback(user, session, answer):
     if lesson_session is None:
         lesson_session = LessonSession.objects.create(
             study_session=session,
+            session_mode=LessonSession.SESSION_MODE_TEXT,
             status='active',
             current_turn=1,
         )

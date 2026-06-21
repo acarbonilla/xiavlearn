@@ -152,6 +152,18 @@ class AgentMVPAPITests(APITestCase):
         )
         self.assertEqual(LearnerProfile.objects.get(user=self.user).current_level, 'A2')
         self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 2)
+        grammar_mastery = SkillMastery.objects.get(
+            user=self.user,
+            skill=self.skills['Grammar'],
+        )
+        vocabulary_mastery = SkillMastery.objects.get(
+            user=self.user,
+            skill=self.skills['Vocabulary'],
+        )
+        self.assertEqual(int(grammar_mastery.score), data['skill_scores']['Grammar'])
+        self.assertEqual(int(vocabulary_mastery.score), data['skill_scores']['Vocabulary'])
+        self.assertEqual(grammar_mastery.level_code, data['overall_level'])
+        self.assertEqual(vocabulary_mastery.level_code, data['overall_level'])
         self.assertEqual(
             SkillMastery.objects.filter(
                 user=self.user,
@@ -640,7 +652,10 @@ class AgentMVPAPITests(APITestCase):
             user=self.user,
             skill__name='Pronunciation',
         )
+        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 1)
         self.assertEqual(int(mastery.score), 92)
+        self.assertEqual(int(mastery.score), data['score'])
+        self.assertEqual(mastery.level_code, 'B2')
         self.assertEqual(mastery.status, 'Mastered')
 
     @patch('agents.voice_services.transcribe_audio')
@@ -675,6 +690,9 @@ class AgentMVPAPITests(APITestCase):
             user=self.user,
             skill__name='Speaking',
         )
+        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 1)
+        self.assertEqual(int(mastery.score), data['score'])
+        self.assertEqual(mastery.level_code, 'B2')
         self.assertEqual(mastery.status, 'Mastered')
 
     @patch('agents.voice_services.call_llm_json')
@@ -701,7 +719,10 @@ class AgentMVPAPITests(APITestCase):
             user=self.user,
             skill__name='Listening',
         )
+        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 1)
         self.assertEqual(int(mastery.score), 90)
+        self.assertEqual(int(mastery.score), data['score'])
+        self.assertEqual(mastery.level_code, 'B2')
         self.assertEqual(mastery.status, 'Mastered')
 
     @patch('agents.voice_services.call_llm_json')
@@ -1090,13 +1111,14 @@ class AgentMVPAPITests(APITestCase):
     def test_guided_teacher_session_completion_keeps_official_mastery_and_level(self):
         self.authenticate()
         LearnerProfile.objects.create(user=self.user, current_level='A2')
-        SkillMastery.objects.create(
+        mastery = SkillMastery.objects.create(
             user=self.user,
             skill=self.skills['Grammar'],
             level_code='A2',
             score=88,
             status='Mastered',
         )
+        original_last_updated = mastery.last_updated
 
         session_response = self.client.post(
             '/api/teacher/session/start/',
@@ -1125,11 +1147,13 @@ class AgentMVPAPITests(APITestCase):
         self.assertTrue(final_data['completed'])
         self.assertEqual(final_data['final_result']['session_score'], 65)
 
-        mastery = SkillMastery.objects.get(user=self.user, skill=self.skills['Grammar'])
+        mastery.refresh_from_db()
         profile = LearnerProfile.objects.get(user=self.user)
+        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 1)
         self.assertEqual(int(mastery.score), 88)
         self.assertEqual(mastery.level_code, 'A2')
         self.assertEqual(mastery.status, 'Mastered')
+        self.assertEqual(mastery.last_updated, original_last_updated)
         self.assertEqual(profile.current_level, 'A2')
 
         dashboard_response = self.client.get('/api/dashboard/')
@@ -1144,13 +1168,14 @@ class AgentMVPAPITests(APITestCase):
     def test_teacher_feedback_endpoint_returns_session_score_without_mastery_update(self):
         self.authenticate()
         LearnerProfile.objects.create(user=self.user, current_level='A2')
-        SkillMastery.objects.create(
+        mastery = SkillMastery.objects.create(
             user=self.user,
             skill=self.skills['Grammar'],
             level_code='A2',
             score=88,
             status='Mastered',
         )
+        original_last_updated = mastery.last_updated
         study_session = StudySession.objects.create(
             user=self.user,
             module=self.grammar_module,
@@ -1169,10 +1194,12 @@ class AgentMVPAPITests(APITestCase):
         data = self.assert_success_response(response)
         self.assertEqual(data['session_score'], 62)
 
-        mastery = SkillMastery.objects.get(user=self.user, skill=self.skills['Grammar'])
+        mastery.refresh_from_db()
         profile = LearnerProfile.objects.get(user=self.user)
+        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 1)
         self.assertEqual(int(mastery.score), 88)
         self.assertEqual(mastery.level_code, 'A2')
+        self.assertEqual(mastery.last_updated, original_last_updated)
         self.assertEqual(profile.current_level, 'A2')
 
     def test_teacher_session_detail_and_answer_cannot_access_another_users_session(self):
@@ -1201,6 +1228,200 @@ class AgentMVPAPITests(APITestCase):
         self.assertFalse(answer_response.data['success'])
         self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertFalse(detail_response.data['success'])
+
+    def test_speaking_teacher_session_start_reads_official_mastery_without_updating_it(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        mastery = SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Speaking'],
+            level_code='B1',
+            score=72,
+            status='Learning',
+        )
+        original_last_updated = mastery.last_updated
+
+        response = self.client.post(
+            '/api/teacher/speaking/sessions/start/',
+            {},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['session_mode'], 'speaking')
+        self.assertEqual(data['skill'], 'Speaking')
+        self.assertTrue(data['official_mastery_assessed'])
+        self.assertEqual(data['official_mastery_score'], 72)
+        self.assertEqual(data['official_mastery_level'], 'B1')
+        self.assertEqual(data['total_turns'], 3)
+        self.assertEqual(data['current_turn'], 1)
+        self.assertEqual(data['current_task']['turn_number'], 1)
+        self.assertEqual(data['current_task']['task_type'], 'spoken_response')
+        self.assertIn('problem', data['current_task']['teacher_prompt'].lower())
+        self.assertTrue(data['current_task']['target_focus'])
+
+        mastery.refresh_from_db()
+        self.assertEqual(mastery.last_updated, original_last_updated)
+
+        lesson_session = LessonSession.objects.get(pk=data['session_id'])
+        self.assertEqual(lesson_session.session_mode, LessonSession.SESSION_MODE_SPEAKING)
+        self.assertEqual(lesson_session.study_session.session_type, 'speaking_teacher_session')
+        self.assertIsNone(lesson_session.study_session.module)
+
+    @patch('agents.voice_services.transcribe_audio')
+    def test_speaking_teacher_session_accepts_audio_upload_and_saves_transcript(
+        self,
+        mock_transcribe_audio,
+    ):
+        self.authenticate()
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Speaking'],
+            level_code='A2',
+            score=68,
+            status='Learning',
+        )
+        mock_transcribe_audio.return_value = (
+            'I solved a customer problem because I checked the system settings carefully.'
+        )
+        start_response = self.client.post(
+            '/api/teacher/speaking/sessions/start/',
+            {},
+            format='json',
+        )
+        session_data = self.assert_success_response(start_response)
+        audio_file = SimpleUploadedFile(
+            'speaking-practice.webm',
+            b'fake audio',
+            content_type='audio/webm',
+        )
+
+        response = self.client.post(
+            f"/api/teacher/speaking/sessions/{session_data['session_id']}/answer/",
+            {'audio_file': audio_file},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertFalse(data['completed'])
+        self.assertEqual(
+            data['turn']['transcript'],
+            mock_transcribe_audio.return_value,
+        )
+        self.assertTrue(data['turn']['evaluation_breakdown'])
+        turn = LessonTurn.objects.get(session_id=session_data['session_id'], turn_number=1)
+        self.assertEqual(turn.student_answer, mock_transcribe_audio.return_value)
+
+    def test_speaking_teacher_session_transcript_fallback_completes_without_mastery_update(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        mastery = SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Speaking'],
+            level_code='B1',
+            score=72,
+            status='Learning',
+        )
+        original_last_updated = mastery.last_updated
+
+        start_response = self.client.post(
+            '/api/teacher/speaking/sessions/start/',
+            {},
+            format='json',
+        )
+        self.assertEqual(start_response.status_code, status.HTTP_201_CREATED)
+        session_data = self.assert_success_response(start_response)
+
+        transcripts = [
+            'I solved a problem at work because the customer could not log in, so I reset the account and explained the steps.',
+            'My English goal is to speak more clearly, and I practice every day because I need better communication at work.',
+            'I think daily speaking practice is effective because it builds confidence and helps me organize my ideas better.',
+        ]
+
+        final_data = None
+        for transcript in transcripts:
+            answer_response = self.client.post(
+                f"/api/teacher/speaking/sessions/{session_data['session_id']}/answer/",
+                {'transcript': transcript},
+                format='json',
+            )
+            self.assertEqual(answer_response.status_code, status.HTTP_200_OK)
+            final_data = self.assert_success_response(answer_response)
+
+        self.assertIsNotNone(final_data)
+        self.assertTrue(final_data['completed'])
+        self.assertIsNotNone(final_data['final_result'])
+        self.assertEqual(final_data['final_result']['label'], 'Practice Score')
+        self.assertGreaterEqual(final_data['final_result']['practice_score'], 75)
+        self.assertIn('Speaking Diagnostic', final_data['final_result']['next_suggestion'])
+
+        detail_response = self.client.get(
+            f"/api/teacher/speaking/sessions/{session_data['session_id']}/"
+        )
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        detail_data = self.assert_success_response(detail_response)
+        self.assertEqual(detail_data['status'], 'completed')
+        self.assertEqual(len(detail_data['turns']), 3)
+        self.assertIsNone(detail_data['current_task'])
+        self.assertEqual(detail_data['final_result']['label'], 'Practice Score')
+
+        lesson_session = LessonSession.objects.get(pk=session_data['session_id'])
+        study_session = lesson_session.study_session
+        self.assertEqual(lesson_session.session_mode, LessonSession.SESSION_MODE_SPEAKING)
+        self.assertEqual(LessonTurn.objects.filter(session=lesson_session).count(), 3)
+        self.assertEqual(int(lesson_session.final_score), final_data['final_result']['practice_score'])
+        self.assertEqual(int(study_session.score), final_data['final_result']['practice_score'])
+        self.assertIsNotNone(study_session.completed_at)
+
+        mastery.refresh_from_db()
+        self.assertEqual(int(mastery.score), 72)
+        self.assertEqual(mastery.level_code, 'B1')
+        self.assertEqual(mastery.status, 'Learning')
+        self.assertEqual(mastery.last_updated, original_last_updated)
+        self.assertEqual(LearnerProfile.objects.get(user=self.user).current_level, 'A2')
+
+        dashboard_response = self.client.get('/api/dashboard/')
+        self.assertEqual(dashboard_response.status_code, status.HTTP_200_OK)
+        dashboard_data = self.assert_success_response(dashboard_response)
+        speaking_mastery = next(
+            item for item in dashboard_data['skill_mastery']
+            if item['skill']['name'] == 'Speaking'
+        )
+        self.assertEqual(speaking_mastery['score'], '72.00')
+
+    def test_speaking_teacher_session_access_is_limited_to_owner(self):
+        speaking_mastery = SkillMastery.objects.create(
+            user=self.other_user,
+            skill=self.skills['Speaking'],
+            level_code='A2',
+            score=68,
+            status='Learning',
+        )
+        self.client.force_authenticate(self.other_user)
+        start_response = self.client.post(
+            '/api/teacher/speaking/sessions/start/',
+            {},
+            format='json',
+        )
+        self.assertEqual(start_response.status_code, status.HTTP_201_CREATED)
+        session_data = self.assert_success_response(start_response)
+
+        self.authenticate()
+        detail_response = self.client.get(
+            f"/api/teacher/speaking/sessions/{session_data['session_id']}/"
+        )
+        answer_response = self.client.post(
+            f"/api/teacher/speaking/sessions/{session_data['session_id']}/answer/",
+            {'transcript': 'I solved the issue because I checked the password settings.'},
+            format='json',
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(answer_response.status_code, status.HTTP_404_NOT_FOUND)
+        speaking_mastery.refresh_from_db()
+        self.assertEqual(int(speaking_mastery.score), 68)
 
     def test_scheduler_and_coach_return_saved_progress(self):
         self.authenticate()

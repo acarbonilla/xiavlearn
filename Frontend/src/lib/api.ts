@@ -176,6 +176,67 @@ export type GuidedTeacherAnswerResponse = {
   final_result: GuidedTeacherFinalResult | null;
 };
 
+export type SpeakingTeacherCurrentTask = {
+  turn_number: number;
+  task_type: string;
+  teacher_prompt: string;
+  target_focus: string;
+};
+
+export type SpeakingTeacherNextTask = {
+  turn_number: number;
+  teacher_task: string;
+  target_focus: string;
+};
+
+export type SpeakingTeacherTurn = {
+  turn_number: number;
+  task_type: string;
+  target_focus: string;
+  teacher_task: string;
+  transcript: string;
+  score: number | null;
+  feedback: string;
+  correction: string;
+  explanation: string;
+  encouragement: string;
+  evaluation_breakdown: Record<string, number>;
+};
+
+export type SpeakingTeacherFinalResult = {
+  practice_score: number | null;
+  label: string;
+  strengths: string[];
+  improvement_areas: string[];
+  next_suggestion: string;
+  feedback_summary: string;
+};
+
+export type SpeakingTeacherSession = {
+  session_id: number;
+  study_session_id: number;
+  session_mode: "speaking";
+  skill: string;
+  official_mastery_assessed: boolean;
+  official_mastery_score: number;
+  official_mastery_level: string;
+  status: string;
+  current_turn: number;
+  total_turns: number;
+  lesson: string;
+  turns: SpeakingTeacherTurn[];
+  current_task: SpeakingTeacherCurrentTask | null;
+  final_result: SpeakingTeacherFinalResult | null;
+};
+
+export type SpeakingTeacherAnswerResponse = {
+  session_id: number;
+  turn: SpeakingTeacherTurn;
+  completed: boolean;
+  next_task: SpeakingTeacherNextTask | null;
+  final_result: SpeakingTeacherFinalResult | null;
+};
+
 export type StudyPlanData = {
   plan: {
     focus: string[];
@@ -458,6 +519,34 @@ export function submitGuidedTeacherAnswer(
 
 export function getGuidedTeacherSession(sessionId: number) {
   return request<GuidedTeacherSession>(`/api/teacher/session/${sessionId}/`);
+}
+
+export function startSpeakingTeacherSession() {
+  return request<SpeakingTeacherSession>("/api/teacher/speaking/sessions/start/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getSpeakingTeacherSession(sessionId: number) {
+  return request<SpeakingTeacherSession>(`/api/teacher/speaking/sessions/${sessionId}/`);
+}
+
+export function answerSpeakingTeacherSession(
+  sessionId: number,
+  payload: FormData | { transcript: string },
+) {
+  const body =
+    typeof FormData !== "undefined" && payload instanceof FormData
+      ? payload
+      : JSON.stringify(payload);
+  return request<SpeakingTeacherAnswerResponse>(
+    `/api/teacher/speaking/sessions/${sessionId}/answer/`,
+    {
+      method: "POST",
+      body,
+    },
+  );
 }
 
 export function generateStudyPlan() {

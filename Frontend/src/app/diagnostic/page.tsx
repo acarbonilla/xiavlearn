@@ -114,7 +114,12 @@ export default function DiagnosticPage() {
               {result.assessed_skills.map((skill) => {
                 const score = result.skill_scores[skill];
                 return typeof score === "number" ? (
-                  <SkillScoreCard key={skill} score={score} skill={skill} />
+                  <SkillScoreCard
+                    key={skill}
+                    diagnosticType="Text Diagnostic"
+                    score={score}
+                    skill={skill}
+                  />
                 ) : null;
               })}
             </div>

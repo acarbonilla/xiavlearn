@@ -5,6 +5,9 @@ from .views import (
     CurriculumRecommendationView,
     DiagnosticEvaluateView,
     SchedulerGeneratePlanView,
+    SpeakingTeacherSessionAnswerView,
+    SpeakingTeacherSessionDetailView,
+    SpeakingTeacherSessionStartView,
     TeacherSessionAnswerView,
     TeacherSessionDetailView,
     TeacherSessionStartView,
@@ -55,6 +58,21 @@ urlpatterns = [
         'teacher/feedback/',
         TeacherFeedbackView.as_view(),
         name='teacher-feedback',
+    ),
+    path(
+        'teacher/speaking/sessions/start/',
+        SpeakingTeacherSessionStartView.as_view(),
+        name='teacher-speaking-session-start',
+    ),
+    path(
+        'teacher/speaking/sessions/<int:session_id>/',
+        SpeakingTeacherSessionDetailView.as_view(),
+        name='teacher-speaking-session-detail',
+    ),
+    path(
+        'teacher/speaking/sessions/<int:session_id>/answer/',
+        SpeakingTeacherSessionAnswerView.as_view(),
+        name='teacher-speaking-session-answer',
     ),
     path(
         'scheduler/generate-plan/',

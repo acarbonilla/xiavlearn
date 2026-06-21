@@ -10,6 +10,7 @@ const links = [
   ["Dashboard", "/dashboard"],
   ["Diagnostic", "/diagnostic"],
   ["Voice Diagnostic", "/voice-diagnostic"],
+  ["Speaking Teacher", "/speaking-teacher"],
   ["Recommendation", "/recommendation"],
   ["Study Plan", "/study-plan"],
 ];

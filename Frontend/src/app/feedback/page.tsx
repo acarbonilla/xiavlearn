@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import Button from "@/components/Button";
@@ -12,7 +12,7 @@ import {
   submitGuidedTeacherAnswer,
 } from "@/lib/api";
 
-export default function FeedbackPage() {
+function FeedbackPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const moduleIdParam = searchParams.get("moduleId");
@@ -248,5 +248,21 @@ export default function FeedbackPage() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+export default function FeedbackPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="page-shell">
+          <p className="eyebrow">Step 4</p>
+          <h1 className="page-title">AI Teacher Session</h1>
+          <p className="mt-8 text-[#60708a]">Starting your session...</p>
+        </main>
+      }
+    >
+      <FeedbackPageContent />
+    </Suspense>
   );
 }

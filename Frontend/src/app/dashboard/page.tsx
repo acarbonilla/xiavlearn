@@ -7,6 +7,14 @@ import Card from "@/components/Card";
 import SkillScoreCard from "@/components/SkillScoreCard";
 import { type DashboardData, getDashboard } from "@/lib/api";
 
+const DIAGNOSTIC_TYPE_BY_SKILL: Record<string, string> = {
+  Grammar: "Text Diagnostic",
+  Vocabulary: "Text Diagnostic",
+  Listening: "Listening Diagnostic",
+  Speaking: "Speaking Diagnostic",
+  Pronunciation: "Pronunciation Diagnostic",
+};
+
 export default function DashboardPage() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [error, setError] = useState("");
@@ -49,7 +57,7 @@ export default function DashboardPage() {
               </h2>
               {dashboard.recommended_module ? (
                 <p className="mt-2 text-[#60708a]">
-                  {dashboard.recommended_module.level} ·{" "}
+                  {dashboard.recommended_module.level} |{" "}
                   {dashboard.recommended_module.skill}
                 </p>
               ) : null}
@@ -67,9 +75,13 @@ export default function DashboardPage() {
                 {dashboard.skill_mastery.map((mastery) => (
                   <SkillScoreCard
                     key={mastery.id}
+                    diagnosticType={
+                      DIAGNOSTIC_TYPE_BY_SKILL[mastery.skill.name] ??
+                      "Official Diagnostic"
+                    }
                     score={mastery.score}
                     skill={mastery.skill.name}
-                    status={`${mastery.level_code} · ${mastery.status}`}
+                    status={`${mastery.level_code} | ${mastery.status}`}
                   />
                 ))}
               </div>

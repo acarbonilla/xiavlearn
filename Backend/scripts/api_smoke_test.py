@@ -137,14 +137,14 @@ def main():
         },
     )
     require(
-        len(diagnostic.get('skill_scores', {})) == 5,
-        'Diagnostic did not return five skill scores.',
+        len(diagnostic.get('skill_scores', {})) == 2,
+        'Text diagnostic did not return the two official assessed skill scores.',
     )
 
     _, dashboard = request_json('/api/dashboard/', authenticated=True)
     require(
-        len(dashboard.get('skill_mastery', [])) == 5,
-        'Diagnostic did not create five mastery records.',
+        len(dashboard.get('skill_mastery', [])) == 2,
+        'Text diagnostic did not create only the two official mastery records.',
     )
     print('PASS diagnostic mastery persistence')
 
