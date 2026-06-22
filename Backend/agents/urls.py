@@ -4,6 +4,12 @@ from .views import (
     CoachSummaryView,
     CurriculumRecommendationView,
     DiagnosticEvaluateView,
+    ListeningTeacherSessionAnswerView,
+    ListeningTeacherSessionDetailView,
+    ListeningTeacherSessionStartView,
+    PronunciationTeacherSessionAnswerView,
+    PronunciationTeacherSessionDetailView,
+    PronunciationTeacherSessionStartView,
     SchedulerGeneratePlanView,
     SpeakingTeacherSessionAnswerView,
     SpeakingTeacherSessionDetailView,
@@ -15,9 +21,16 @@ from .views import (
     TeacherSessionView,
 )
 from .voice_views import (
+    ListeningEvaluateBatchView,
     ListeningEvaluateView,
     PronunciationEvaluateView,
+    PronunciationEvaluateBatchView,
+    SpeakingEvaluateBatchView,
     SpeakingEvaluateView,
+    VoiceDiagnosticSessionDetailView,
+    VoiceDiagnosticSessionListView,
+    VoiceDiagnosticSessionReportView,
+    VoiceDiagnosticSessionStartView,
     VoiceDiagnosticPromptsView,
     VoiceDiagnosticTTSView,
 )
@@ -75,6 +88,36 @@ urlpatterns = [
         name='teacher-speaking-session-answer',
     ),
     path(
+        'teacher/listening/sessions/start/',
+        ListeningTeacherSessionStartView.as_view(),
+        name='teacher-listening-session-start',
+    ),
+    path(
+        'teacher/listening/sessions/<int:session_id>/',
+        ListeningTeacherSessionDetailView.as_view(),
+        name='teacher-listening-session-detail',
+    ),
+    path(
+        'teacher/listening/sessions/<int:session_id>/answer/',
+        ListeningTeacherSessionAnswerView.as_view(),
+        name='teacher-listening-session-answer',
+    ),
+    path(
+        'teacher/pronunciation/sessions/start/',
+        PronunciationTeacherSessionStartView.as_view(),
+        name='teacher-pronunciation-session-start',
+    ),
+    path(
+        'teacher/pronunciation/sessions/<int:session_id>/',
+        PronunciationTeacherSessionDetailView.as_view(),
+        name='teacher-pronunciation-session-detail',
+    ),
+    path(
+        'teacher/pronunciation/sessions/<int:session_id>/answer/',
+        PronunciationTeacherSessionAnswerView.as_view(),
+        name='teacher-pronunciation-session-answer',
+    ),
+    path(
         'scheduler/generate-plan/',
         SchedulerGeneratePlanView.as_view(),
         name='scheduler-generate-plan',
@@ -95,9 +138,34 @@ urlpatterns = [
         name='voice-diagnostic-tts',
     ),
     path(
+        'voice-diagnostic/sessions/start/',
+        VoiceDiagnosticSessionStartView.as_view(),
+        name='voice-diagnostic-session-start',
+    ),
+    path(
+        'voice-diagnostic/sessions/',
+        VoiceDiagnosticSessionListView.as_view(),
+        name='voice-diagnostic-session-list',
+    ),
+    path(
+        'voice-diagnostic/sessions/<int:session_id>/',
+        VoiceDiagnosticSessionDetailView.as_view(),
+        name='voice-diagnostic-session-detail',
+    ),
+    path(
+        'voice-diagnostic/sessions/<int:session_id>/report/',
+        VoiceDiagnosticSessionReportView.as_view(),
+        name='voice-diagnostic-session-report',
+    ),
+    path(
         'voice-diagnostic/pronunciation/evaluate/',
         PronunciationEvaluateView.as_view(),
         name='voice-diagnostic-pronunciation-evaluate',
+    ),
+    path(
+        'voice-diagnostic/pronunciation/evaluate-batch/',
+        PronunciationEvaluateBatchView.as_view(),
+        name='voice-diagnostic-pronunciation-evaluate-batch',
     ),
     path(
         'voice-diagnostic/listening/evaluate/',
@@ -105,8 +173,18 @@ urlpatterns = [
         name='voice-diagnostic-listening-evaluate',
     ),
     path(
+        'voice-diagnostic/listening/evaluate-batch/',
+        ListeningEvaluateBatchView.as_view(),
+        name='voice-diagnostic-listening-evaluate-batch',
+    ),
+    path(
         'voice-diagnostic/speaking/evaluate/',
         SpeakingEvaluateView.as_view(),
         name='voice-diagnostic-speaking-evaluate',
+    ),
+    path(
+        'voice-diagnostic/speaking/evaluate-batch/',
+        SpeakingEvaluateBatchView.as_view(),
+        name='voice-diagnostic-speaking-evaluate-batch',
     ),
 ]

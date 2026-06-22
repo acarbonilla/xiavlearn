@@ -91,18 +91,28 @@ export type RecommendationData = {
   recommended_module: ModuleSummary | null;
   reason: string;
   diagnostic_scores: {
-    Vocabulary: number | null;
     Grammar: number | null;
+    Vocabulary: number | null;
     Listening: number | null;
     Speaking: number | null;
+    Pronunciation: number | null;
   };
   current_skill_scores: {
-    Vocabulary: number | null;
     Grammar: number | null;
+    Vocabulary: number | null;
     Listening: number | null;
     Speaking: number | null;
+    Pronunciation: number | null;
   };
   weakest_skill: string | null;
+  recommended_focus: string | null;
+  recommended_focus_reason: string;
+  recommended_action: {
+    type: "teacher_session" | "module";
+    skill: string | null;
+    label: string;
+    href: string;
+  } | null;
   learner_level: string;
   module_level: string | null;
   fallback_used: boolean;
@@ -237,6 +247,151 @@ export type SpeakingTeacherAnswerResponse = {
   final_result: SpeakingTeacherFinalResult | null;
 };
 
+export type PronunciationSubstitution = {
+  expected: string;
+  heard: string;
+};
+
+export type PronunciationTeacherCurrentTask = {
+  turn_number: number;
+  task_type: string;
+  teacher_prompt: string;
+  target_text: string;
+  target_focus: string;
+};
+
+export type PronunciationTeacherNextTask = {
+  turn_number: number;
+  teacher_task: string;
+  target_text: string;
+  target_focus: string;
+};
+
+export type PronunciationTeacherTurn = {
+  turn_number: number;
+  task_type: string;
+  teacher_task: string;
+  target_text: string;
+  target_focus: string;
+  transcript: string;
+  score: number | null;
+  feedback: string;
+  correction: string;
+  explanation: string;
+  encouragement: string;
+  word_accuracy: number;
+  missing_words: string[];
+  extra_words: string[];
+  substituted_words: PronunciationSubstitution[];
+  evaluation_breakdown: Record<string, number>;
+};
+
+export type PronunciationTeacherFinalResult = {
+  practice_score: number | null;
+  label: string;
+  strengths: string[];
+  improvement_areas: string[];
+  next_suggestion: string;
+  feedback_summary: string;
+};
+
+export type PronunciationTeacherSession = {
+  session_id: number;
+  study_session_id: number;
+  session_mode: "pronunciation";
+  skill: string;
+  official_mastery_assessed: boolean;
+  official_mastery_score: number;
+  official_mastery_level: string;
+  status: string;
+  current_turn: number;
+  total_turns: number;
+  lesson: string;
+  turns: PronunciationTeacherTurn[];
+  current_task: PronunciationTeacherCurrentTask | null;
+  final_result: PronunciationTeacherFinalResult | null;
+};
+
+export type PronunciationTeacherAnswerResponse = {
+  session_id: number;
+  turn: PronunciationTeacherTurn;
+  completed: boolean;
+  next_task: PronunciationTeacherNextTask | null;
+  final_result: PronunciationTeacherFinalResult | null;
+};
+
+export type ListeningTeacherCurrentTask = {
+  turn_number: number;
+  task_type: string;
+  teacher_prompt: string;
+  passage_text: string;
+  audio_url: string | null;
+  question_text: string;
+  target_focus: string;
+};
+
+export type ListeningTeacherNextTask = {
+  turn_number: number;
+  teacher_task: string;
+  passage_text: string;
+  audio_url: string | null;
+  question_text: string;
+  target_focus: string;
+};
+
+export type ListeningTeacherTurn = {
+  turn_number: number;
+  task_type: string;
+  teacher_task: string;
+  passage_text: string;
+  question_text: string;
+  expected_answer: string;
+  student_answer: string;
+  score: number | null;
+  feedback: string;
+  correction: string;
+  explanation: string;
+  encouragement: string;
+  answer_match: string;
+  matched_keywords: string[];
+  missing_keywords: string[];
+  evaluation_breakdown: Record<string, string | number | string[]>;
+};
+
+export type ListeningTeacherFinalResult = {
+  practice_score: number | null;
+  label: string;
+  strengths: string[];
+  improvement_areas: string[];
+  next_suggestion: string;
+  feedback_summary: string;
+};
+
+export type ListeningTeacherSession = {
+  session_id: number;
+  study_session_id: number;
+  session_mode: "listening";
+  skill: string;
+  official_mastery_assessed: boolean;
+  official_mastery_score: number;
+  official_mastery_level: string;
+  status: string;
+  current_turn: number;
+  total_turns: number;
+  lesson: string;
+  turns: ListeningTeacherTurn[];
+  current_task: ListeningTeacherCurrentTask | null;
+  final_result: ListeningTeacherFinalResult | null;
+};
+
+export type ListeningTeacherAnswerResponse = {
+  session_id: number;
+  turn: ListeningTeacherTurn;
+  completed: boolean;
+  next_task: ListeningTeacherNextTask | null;
+  final_result: ListeningTeacherFinalResult | null;
+};
+
 export type StudyPlanData = {
   plan: {
     focus: string[];
@@ -265,16 +420,31 @@ export type CoachSummary = {
 };
 
 export type VoiceDiagnosticPrompts = {
+  level_code: string;
   pronunciation: {
     target_sentence: string;
+    items: Array<{
+      item_number: number;
+      target_sentence: string;
+    }>;
   };
   listening: {
     passage: string;
     question: string;
     expected_answer: string;
+    items: Array<{
+      item_number: number;
+      passage: string;
+      question: string;
+      expected_answer: string;
+    }>;
   };
   speaking: {
     question: string;
+    items: Array<{
+      item_number: number;
+      question: string;
+    }>;
   };
 };
 
@@ -284,9 +454,27 @@ export type PronunciationResult = {
   score: number;
   status: string;
   feedback: string;
+  explanation: string;
   word_accuracy: number;
   missing_words: string[];
   extra_words: string[];
+  breakdown: {
+    rubric: string;
+    word_accuracy: number;
+    target_completion: number;
+    sequence_accuracy: number;
+    substitution_control: number;
+    missing_word_control: number;
+    extra_word_control: number;
+    clarity_estimate: number;
+    missing_words: string[];
+    extra_words: string[];
+    substituted_words: Array<{
+      expected: string;
+      heard: string;
+    }>;
+    score_reasons: string[];
+  };
   substituted_words?: Array<{
     expected: string;
     heard: string;
@@ -297,9 +485,26 @@ export type ListeningResult = {
   score: number;
   status: string;
   feedback: string;
+  explanation: string;
   question: string;
   expected_answer: string;
   user_answer: string;
+  answer?: string;
+  matched_keywords?: string[];
+  missing_keywords?: string[];
+  answer_match?: string;
+  breakdown: {
+    rubric: string;
+    correct_detail: number;
+    question_relevance: number;
+    completeness: number;
+    semantic_match: number;
+    clarity: number;
+    matched_keywords: string[];
+    missing_keywords: string[];
+    answer_match: string;
+    score_reasons: string[];
+  };
 };
 
 export type SpeakingResult = {
@@ -308,8 +513,143 @@ export type SpeakingResult = {
   score: number;
   status: string;
   feedback: string;
+  explanation: string;
   strengths: string[];
   improvement_areas: string[];
+  breakdown: {
+    rubric: string;
+    task_relevance: number;
+    completeness: number;
+    clarity: number;
+    grammar_control: number;
+    vocabulary_range: number;
+    coherence: number;
+    fluency_signal: number;
+    word_count: number;
+    sentence_count: number;
+    filler_count: number;
+    strengths: string[];
+    improvement_areas: string[];
+    score_reasons: string[];
+  };
+};
+
+export type VoiceDiagnosticSessionState = {
+  session_id: number;
+  session_status: string;
+  recommended_focus: string;
+  summary: string;
+  started_at: string;
+  completed_at: string | null;
+};
+
+export type VoiceDiagnosticAggregation = {
+  base_average: number;
+  score_range: number;
+  consistency_adjustment: number;
+  final_score: number;
+};
+
+export type PronunciationBatchResult = {
+  items: Array<PronunciationResult & { item_number: number }>;
+  final_score: number;
+  status: string;
+  level_code: string;
+  feedback_summary: string;
+  aggregation: VoiceDiagnosticAggregation;
+} & VoiceDiagnosticSessionState;
+
+export type ListeningBatchResult = {
+  items: Array<
+    ListeningResult & {
+      item_number: number;
+      passage: string;
+    }
+  >;
+  final_score: number;
+  status: string;
+  level_code: string;
+  feedback_summary: string;
+  aggregation: VoiceDiagnosticAggregation;
+} & VoiceDiagnosticSessionState;
+
+export type SpeakingBatchResult = {
+  items: Array<SpeakingResult & { item_number: number }>;
+  final_score: number;
+  status: string;
+  level_code: string;
+  feedback_summary: string;
+  aggregation: VoiceDiagnosticAggregation;
+} & VoiceDiagnosticSessionState;
+
+export type VoiceDiagnosticSessionStart = {
+  session_id: number;
+  status: string;
+  started_at: string;
+};
+
+export type VoiceDiagnosticHistoryItem = {
+  id: number;
+  skill: string;
+  item_number: number;
+  task_type: string;
+  prompt_text: string;
+  target_text: string;
+  passage_text: string;
+  question_text: string;
+  expected_answer: string;
+  user_answer: string;
+  transcript: string;
+  score: number | null;
+  feedback: string;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+export type VoiceDiagnosticHistorySession = {
+  id: number;
+  status: string;
+  pronunciation_score: number | null;
+  listening_score: number | null;
+  speaking_score: number | null;
+  recommended_focus: string;
+  summary: string;
+  started_at: string;
+  completed_at: string | null;
+};
+
+export type VoiceDiagnosticHistoryDetail = VoiceDiagnosticHistorySession & {
+  items: VoiceDiagnosticHistoryItem[];
+};
+
+export type VoiceDiagnosticReport = {
+  session_id: number;
+  status: string;
+  official_mastery_updated: boolean;
+  message?: string;
+  scores?: {
+    Pronunciation: number | null;
+    Listening: number | null;
+    Speaking: number | null;
+  };
+  skill_breakdown?: Array<{
+    skill: string;
+    final_score: number | null;
+    item_scores: number[];
+    item_count: number;
+  }>;
+  recommended_focus?: string | null;
+  recommended_focus_reason?: string;
+  next_teacher_session?: {
+    skill: string;
+    label: string;
+    href: string;
+  } | null;
+  recommendation_href?: string;
+  study_plan_href?: string;
+  history_href?: string;
+  dashboard_href?: string;
+  summary?: string;
 };
 
 type ApiEnvelope<T> = {
@@ -549,6 +889,72 @@ export function answerSpeakingTeacherSession(
   );
 }
 
+export function startListeningTeacherSession() {
+  return request<ListeningTeacherSession>(
+    "/api/teacher/listening/sessions/start/",
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export function getListeningTeacherSession(sessionId: number) {
+  return request<ListeningTeacherSession>(
+    `/api/teacher/listening/sessions/${sessionId}/`,
+  );
+}
+
+export function answerListeningTeacherSession(
+  sessionId: number,
+  payload: FormData | { answer: string },
+) {
+  const body =
+    typeof FormData !== "undefined" && payload instanceof FormData
+      ? payload
+      : JSON.stringify(payload);
+  return request<ListeningTeacherAnswerResponse>(
+    `/api/teacher/listening/sessions/${sessionId}/answer/`,
+    {
+      method: "POST",
+      body,
+    },
+  );
+}
+
+export function startPronunciationTeacherSession() {
+  return request<PronunciationTeacherSession>(
+    "/api/teacher/pronunciation/sessions/start/",
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export function getPronunciationTeacherSession(sessionId: number) {
+  return request<PronunciationTeacherSession>(
+    `/api/teacher/pronunciation/sessions/${sessionId}/`,
+  );
+}
+
+export function answerPronunciationTeacherSession(
+  sessionId: number,
+  payload: FormData | { transcript: string },
+) {
+  const body =
+    typeof FormData !== "undefined" && payload instanceof FormData
+      ? payload
+      : JSON.stringify(payload);
+  return request<PronunciationTeacherAnswerResponse>(
+    `/api/teacher/pronunciation/sessions/${sessionId}/answer/`,
+    {
+      method: "POST",
+      body,
+    },
+  );
+}
+
 export function generateStudyPlan() {
   return request<StudyPlanData>("/api/scheduler/generate-plan/", {
     method: "POST",
@@ -564,6 +970,25 @@ export function getVoiceDiagnosticPrompts() {
   return request<VoiceDiagnosticPrompts>("/api/voice-diagnostic/prompts/");
 }
 
+export function startVoiceDiagnosticSession() {
+  return request<VoiceDiagnosticSessionStart>("/api/voice-diagnostic/sessions/start/", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getVoiceDiagnosticSessions() {
+  return request<VoiceDiagnosticHistorySession[]>("/api/voice-diagnostic/sessions/");
+}
+
+export function getVoiceDiagnosticSession(sessionId: number) {
+  return request<VoiceDiagnosticHistoryDetail>(`/api/voice-diagnostic/sessions/${sessionId}/`);
+}
+
+export function getVoiceDiagnosticReport(sessionId: number) {
+  return request<VoiceDiagnosticReport>(`/api/voice-diagnostic/sessions/${sessionId}/report/`);
+}
+
 export function requestTTS(text: string) {
   return requestBlob("/api/voice-diagnostic/tts/", {
     method: "POST",
@@ -575,6 +1000,19 @@ export function evaluatePronunciation(audioBlob: Blob, targetSentence: string) {
   const formData = new FormData();
   formData.append("audio_file", audioBlob, "pronunciation.webm");
   formData.append("target_sentence", targetSentence);
+  formData.append("update_mastery", "false");
+
+  return request<PronunciationResult>("/api/voice-diagnostic/pronunciation/evaluate/", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export function evaluatePronunciationPreview(audioBlob: Blob, targetSentence: string) {
+  const formData = new FormData();
+  formData.append("audio_file", audioBlob, "pronunciation.webm");
+  formData.append("target_sentence", targetSentence);
+  formData.append("update_mastery", "false");
 
   return request<PronunciationResult>("/api/voice-diagnostic/pronunciation/evaluate/", {
     method: "POST",
@@ -593,6 +1031,23 @@ export function evaluateListening(
       question,
       expected_answer: expectedAnswer,
       user_answer: userAnswer,
+      update_mastery: false,
+    }),
+  });
+}
+
+export function evaluateListeningPreview(
+  question: string,
+  expectedAnswer: string,
+  userAnswer: string,
+) {
+  return request<ListeningResult>("/api/voice-diagnostic/listening/evaluate/", {
+    method: "POST",
+    body: JSON.stringify({
+      question,
+      expected_answer: expectedAnswer,
+      user_answer: userAnswer,
+      update_mastery: false,
     }),
   });
 }
@@ -601,9 +1056,66 @@ export function evaluateSpeaking(audioBlob: Blob, question: string) {
   const formData = new FormData();
   formData.append("audio_file", audioBlob, "speaking.webm");
   formData.append("question", question);
+  formData.append("update_mastery", "false");
 
   return request<SpeakingResult>("/api/voice-diagnostic/speaking/evaluate/", {
     method: "POST",
     body: formData,
+  });
+}
+
+export function evaluateSpeakingPreview(audioBlob: Blob, question: string) {
+  const formData = new FormData();
+  formData.append("audio_file", audioBlob, "speaking.webm");
+  formData.append("question", question);
+  formData.append("update_mastery", "false");
+
+  return request<SpeakingResult>("/api/voice-diagnostic/speaking/evaluate/", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export function submitPronunciationDiagnosticBatch({
+  sessionId,
+  items,
+}: {
+  sessionId?: number;
+  items: Array<{ target_sentence: string; transcript: string }>;
+}) {
+  return request<PronunciationBatchResult>("/api/voice-diagnostic/pronunciation/evaluate-batch/", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, items }),
+  });
+}
+
+export function submitListeningDiagnosticBatch({
+  sessionId,
+  items,
+}: {
+  sessionId?: number;
+  items: Array<{
+    passage: string;
+    question: string;
+    expected_answer: string;
+    answer: string;
+  }>;
+}) {
+  return request<ListeningBatchResult>("/api/voice-diagnostic/listening/evaluate-batch/", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, items }),
+  });
+}
+
+export function submitSpeakingDiagnosticBatch({
+  sessionId,
+  items,
+}: {
+  sessionId?: number;
+  items: Array<{ question: string; transcript: string }>;
+}) {
+  return request<SpeakingBatchResult>("/api/voice-diagnostic/speaking/evaluate-batch/", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, items }),
   });
 }

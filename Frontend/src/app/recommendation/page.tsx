@@ -10,14 +10,15 @@ import {
 } from "@/lib/api";
 
 const scoreRows = [
-  "Vocabulary",
   "Grammar",
+  "Vocabulary",
   "Listening",
   "Speaking",
+  "Pronunciation",
 ] as const;
 
 function buildRecommendationCopy(recommendation: RecommendationData) {
-  const focusSkill = recommendation.weakest_skill;
+  const focusSkill = recommendation.recommended_focus ?? recommendation.weakest_skill;
   if (!focusSkill) {
     return {
       summary: recommendation.reason,
@@ -26,31 +27,9 @@ function buildRecommendationCopy(recommendation: RecommendationData) {
     };
   }
 
-  const scoreLookup = recommendation.current_skill_scores as Record<
-    string,
-    number | null
-  >;
-  const focusScore = scoreLookup[focusSkill];
-
-  if (typeof focusScore !== "number") {
-    return {
-      summary: recommendation.reason,
-      detail: recommendation.reason,
-      focusLabel: focusSkill,
-    };
-  }
-
-  if (focusScore < 80) {
-    return {
-      summary: `${focusSkill} is your weakest skill.`,
-      detail: `${focusSkill} is your lowest current skill score, so this lesson helps strengthen that area.`,
-      focusLabel: focusSkill,
-    };
-  }
-
   return {
-    summary: `${focusSkill} is your recommended focus area.`,
-    detail: `Your skills are performing well. ${focusSkill} is selected as your recommended focus area for continued improvement.`,
+    summary: recommendation.reason,
+    detail: recommendation.recommended_focus_reason || recommendation.reason,
     focusLabel: focusSkill,
   };
 }
@@ -69,6 +48,9 @@ export default function RecommendationPage() {
   const recommendationCopy = recommendation
     ? buildRecommendationCopy(recommendation)
     : null;
+  const recommendedAction = recommendation?.recommended_action ?? null;
+  const isVoiceRecommendation =
+    recommendedAction?.type === "teacher_session";
 
   return (
     <main className="page-shell">
@@ -76,7 +58,7 @@ export default function RecommendationPage() {
       <h1 className="page-title">Your recommendation</h1>
 
       {!recommendation && !error ? (
-        <p className="page-copy">Finding your next best module...</p>
+        <p className="page-copy">Finding your next best official focus...</p>
       ) : null}
       {error ? <div className="error-box">{error}</div> : null}
 
@@ -93,7 +75,7 @@ export default function RecommendationPage() {
                 <div className="mt-4 rounded-2xl border border-[#facc15] bg-[#fffbeb] px-4 py-3 text-sm leading-6 text-[#7c5e10]">
                   {`No ${recommendation.learner_level} module is available yet. Showing ${recommendation.module_level} review lesson.`}
                   {recommendation.fallback_reason ? (
-                    <span className="block mt-1">{recommendation.fallback_reason}</span>
+                    <span className="mt-1 block">{recommendation.fallback_reason}</span>
                   ) : null}
                 </div>
               ) : null}
@@ -103,68 +85,18 @@ export default function RecommendationPage() {
               <p className="mt-4 leading-7 text-[#60708a]">
                 {recommendationCopy?.summary}
               </p>
-              <section className="mt-6 rounded-2xl border border-[#dce4ef] bg-[#f8fafc] p-5">
-                <h3 className="text-lg font-black text-[#14213d]">
-                  Your Current Skill Scores
-                </h3>
-                <p className="mt-2 leading-7 text-[#60708a]">
-                  These scores reflect your latest skill mastery based on
-                  diagnostics, practice activities, and lesson feedback.
-                </p>
-                <div className="mt-4 grid gap-3">
-                  {scoreRows.map((skill) => (
-                    <div
-                      className="flex items-center justify-between gap-4 border-b border-[#dce4ef] pb-3 last:border-b-0 last:pb-0"
-                      key={skill}
-                    >
-                      <span className="font-semibold text-[#42536b]">
-                        {skill} Score
-                      </span>
-                      <span className="font-black text-[#14213d]">
-                        {recommendation.current_skill_scores[skill] ??
-                          "Not assessed"}
-                      </span>
-                    </div>
-                  ))}
-                  <div className="flex items-center justify-between gap-4 pt-1">
-                    <span className="font-semibold text-[#42536b]">
-                      Recommended Focus
-                    </span>
-                    <span className="font-black text-[#14213d]">
-                      {recommendationCopy?.focusLabel ?? "Not available"}
-                    </span>
-                  </div>
-                </div>
-                <section className="mt-6 rounded-2xl border border-[#dce4ef] bg-white p-4">
-                  <h4 className="text-base font-black text-[#14213d]">
-                    Current Skill Scores
-                  </h4>
-                  <p className="mt-2 leading-7 text-[#60708a]">
-                    These scores represent your current English mastery and may
-                    be updated by:
-                  </p>
-                  <ul className="mt-3 list-disc space-y-2 pl-5 text-[#42536b]">
-                    <li>Diagnostic assessments</li>
-                    <li>Speaking practice</li>
-                    <li>Listening activities</li>
-                    <li>Teacher feedback</li>
-                  </ul>
-                </section>
-              </section>
-              <section className="mt-6">
-                <h3 className="text-lg font-black text-[#14213d]">
-                  Why this lesson?
-                </h3>
-                <p className="mt-2 leading-7 text-[#60708a]">
-                  {recommendationCopy?.detail}
-                </p>
-              </section>
-              <Button
-                className="mt-6"
-                href={`/feedback?moduleId=${recommendation.recommended_module.id}`}
-              >
-                Start Lesson
-              </Button>
+            </>
+          ) : isVoiceRecommendation ? (
+            <>
+              <p className="text-sm font-bold uppercase tracking-wider text-[#335cff]">
+                Official Voice Focus
+              </p>
+              <h2 className="mt-3 text-3xl font-black">
+                {recommendationCopy?.focusLabel} Teacher Session
+              </h2>
+              <p className="mt-4 leading-7 text-[#60708a]">
+                {recommendationCopy?.summary}
+              </p>
             </>
           ) : (
             <>
@@ -172,6 +104,55 @@ export default function RecommendationPage() {
               <p className="mt-3 text-[#60708a]">{recommendation.reason}</p>
             </>
           )}
+
+          <section className="mt-6 rounded-2xl border border-[#dce4ef] bg-[#f8fafc] p-5">
+            <h3 className="text-lg font-black text-[#14213d]">
+              Your Current Official Skill Scores
+            </h3>
+            <p className="mt-2 leading-7 text-[#60708a]">
+              These scores reflect your latest official mastery. Voice teacher
+              sessions are practice-only and do not change these scores.
+            </p>
+            <div className="mt-4 grid gap-3">
+              {scoreRows.map((skill) => (
+                <div
+                  className="flex items-center justify-between gap-4 border-b border-[#dce4ef] pb-3 last:border-b-0 last:pb-0"
+                  key={skill}
+                >
+                  <span className="font-semibold text-[#42536b]">
+                    {skill} Score
+                  </span>
+                  <span className="font-black text-[#14213d]">
+                    {recommendation.current_skill_scores[skill] ??
+                      "Not assessed"}
+                  </span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between gap-4 pt-1">
+                <span className="font-semibold text-[#42536b]">
+                  Recommended Focus
+                </span>
+                <span className="font-black text-[#14213d]">
+                  {recommendationCopy?.focusLabel ?? "Not available"}
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <section className="mt-6">
+            <h3 className="text-lg font-black text-[#14213d]">
+              Why this focus?
+            </h3>
+            <p className="mt-2 leading-7 text-[#60708a]">
+              {recommendationCopy?.detail}
+            </p>
+          </section>
+
+          {recommendedAction ? (
+            <Button className="mt-6" href={recommendedAction.href}>
+              {recommendedAction.label}
+            </Button>
+          ) : null}
         </Card>
       ) : null}
     </main>

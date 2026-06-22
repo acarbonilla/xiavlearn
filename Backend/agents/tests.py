@@ -6,8 +6,14 @@ from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from agents.models import LessonSession, LessonTurn
+from agents.models import (
+    LessonSession,
+    LessonTurn,
+    VoiceDiagnosticItem,
+    VoiceDiagnosticSession,
+)
 from agents.services import recalculate_learner_level
+from agents.voice_services import _aggregate_batch_scores
 from learning.models import (
     CurriculumLevel,
     LearnerProfile,
@@ -92,8 +98,21 @@ class AgentMVPAPITests(APITestCase):
                 '/api/teacher/feedback/',
                 {'session_id': 1, 'answer': 'Test answer.'},
             ),
+            ('post', '/api/teacher/speaking/sessions/start/', {}),
+            ('get', '/api/teacher/speaking/sessions/1/', None),
+            ('post', '/api/teacher/speaking/sessions/1/answer/', {'transcript': 'Test answer.'}),
+            ('post', '/api/teacher/listening/sessions/start/', {}),
+            ('get', '/api/teacher/listening/sessions/1/', None),
+            ('post', '/api/teacher/listening/sessions/1/answer/', {'answer': 'Test answer.'}),
+            ('post', '/api/teacher/pronunciation/sessions/start/', {}),
+            ('get', '/api/teacher/pronunciation/sessions/1/', None),
+            ('post', '/api/teacher/pronunciation/sessions/1/answer/', {'transcript': 'Test answer.'}),
             ('post', '/api/scheduler/generate-plan/', {}),
             ('get', '/api/coach/summary/', None),
+            ('post', '/api/voice-diagnostic/sessions/start/', {}),
+            ('get', '/api/voice-diagnostic/sessions/', None),
+            ('get', '/api/voice-diagnostic/sessions/1/', None),
+            ('get', '/api/voice-diagnostic/sessions/1/report/', None),
         ]
 
         for method, path, data in requests:
@@ -541,23 +560,24 @@ class AgentMVPAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = self.assert_success_response(response)
+        self.assertEqual(data['level_code'], 'A1')
         self.assertEqual(
             data['pronunciation']['target_sentence'],
-            'I want to improve my English communication skills for work and daily conversations.',
+            'I practice English every day.',
         )
+        self.assertEqual(len(data['pronunciation']['items']), 3)
         self.assertEqual(
             data['listening']['passage'],
-            (
-                'Maria works in an office. Yesterday, she helped a customer solve a computer problem. '
-                'After work, she studied English for thirty minutes.'
-            ),
+            'My name is Anna. I live in Cebu.',
         )
-        self.assertEqual(data['listening']['question'], 'What problem did Maria help solve?')
-        self.assertEqual(data['listening']['expected_answer'], 'A computer problem.')
+        self.assertEqual(data['listening']['question'], 'Where does Anna live?')
+        self.assertEqual(data['listening']['expected_answer'], 'Cebu.')
+        self.assertEqual(len(data['listening']['items']), 3)
         self.assertEqual(
             data['speaking']['question'],
-            'Tell me about yourself and why you want to improve your English.',
+            'Introduce yourself in English.',
         )
+        self.assertEqual(len(data['speaking']['items']), 3)
 
     @override_settings(USE_VOICE_DIAGNOSTIC=False, DEEPGRAM_API_KEY='')
     def test_voice_diagnostic_tts_returns_safe_error_when_not_configured(self):
@@ -620,11 +640,9 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(response.data['error'], 'Speech-to-text is not configured yet.')
 
     @patch('agents.voice_services.transcribe_audio')
-    def test_pronunciation_evaluate_scores_transcript_and_updates_mastery(self, mock_transcribe_audio):
+    def test_pronunciation_evaluate_exact_match_scores_high_and_includes_breakdown(self, mock_transcribe_audio):
         self.authenticate()
-        mock_transcribe_audio.return_value = (
-            'I want to improve my English skills for work and daily conversations.'
-        )
+        mock_transcribe_audio.return_value = 'I practice English every day.'
         audio_file = SimpleUploadedFile(
             'pronunciation.webm',
             b'fake audio',
@@ -635,7 +653,7 @@ class AgentMVPAPITests(APITestCase):
             '/api/voice-diagnostic/pronunciation/evaluate/',
             {
                 'audio_file': audio_file,
-                'target_sentence': 'I want to improve my English communication skills for work and daily conversations.',
+                'target_sentence': 'I practice English every day.',
             },
             format='multipart',
         )
@@ -643,26 +661,25 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = self.assert_success_response(response)
         self.assertEqual(data['transcript'], mock_transcribe_audio.return_value)
-        self.assertEqual(data['score'], 92)
-        self.assertEqual(data['word_accuracy'], 92)
+        self.assertGreaterEqual(data['score'], 90)
+        self.assertEqual(data['word_accuracy'], 100)
         self.assertEqual(data['status'], 'Mastered')
-        self.assertEqual(data['missing_words'], ['communication'])
+        self.assertEqual(data['missing_words'], [])
         self.assertEqual(data['extra_words'], [])
-        mastery = SkillMastery.objects.get(
-            user=self.user,
-            skill__name='Pronunciation',
+        self.assertEqual(data['breakdown']['rubric'], 'pronunciation_v2')
+        self.assertIn('score_reasons', data['breakdown'])
+        self.assertFalse(
+            SkillMastery.objects.filter(
+                user=self.user,
+                skill__name='Pronunciation',
+            ).exists()
         )
-        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 1)
-        self.assertEqual(int(mastery.score), 92)
-        self.assertEqual(int(mastery.score), data['score'])
-        self.assertEqual(mastery.level_code, 'B2')
-        self.assertEqual(mastery.status, 'Mastered')
 
     @patch('agents.voice_services.transcribe_audio')
-    def test_speaking_evaluate_scores_transcript_and_updates_mastery(self, mock_transcribe_audio):
+    def test_speaking_evaluate_relevant_answer_scores_high_and_includes_breakdown(self, mock_transcribe_audio):
         self.authenticate()
         mock_transcribe_audio.return_value = (
-            'My name is Ana and I want to improve my English communication for work.'
+            'My name is Ana. I want to improve my English communication for work, and I practice every day.'
         )
         audio_file = SimpleUploadedFile(
             'speaking.webm',
@@ -686,19 +703,17 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(data['status'], 'Mastered')
         self.assertTrue(data['strengths'])
         self.assertTrue(data['improvement_areas'])
-        mastery = SkillMastery.objects.get(
-            user=self.user,
-            skill__name='Speaking',
+        self.assertEqual(data['breakdown']['rubric'], 'speaking_v2')
+        self.assertGreaterEqual(data['breakdown']['task_relevance'], 80)
+        self.assertFalse(
+            SkillMastery.objects.filter(
+                user=self.user,
+                skill__name='Speaking',
+            ).exists()
         )
-        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 1)
-        self.assertEqual(int(mastery.score), data['score'])
-        self.assertEqual(mastery.level_code, 'B2')
-        self.assertEqual(mastery.status, 'Mastered')
 
-    @patch('agents.voice_services.call_llm_json')
-    def test_listening_evaluate_uses_rule_based_fallback_and_updates_mastery(self, mock_call_llm_json):
+    def test_listening_evaluate_complete_answer_scores_high_and_includes_breakdown(self):
         self.authenticate()
-        mock_call_llm_json.return_value = None
 
         response = self.client.post(
             '/api/voice-diagnostic/listening/evaluate/',
@@ -712,53 +727,43 @@ class AgentMVPAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = self.assert_success_response(response)
-        self.assertEqual(data['score'], 90)
+        self.assertGreaterEqual(data['score'], 85)
         self.assertEqual(data['status'], 'Mastered')
         self.assertIn('Correct', data['feedback'])
-        mastery = SkillMastery.objects.get(
-            user=self.user,
-            skill__name='Listening',
+        self.assertEqual(data['breakdown']['rubric'], 'listening_v2')
+        self.assertEqual(data['answer_match'], 'complete')
+        self.assertFalse(
+            SkillMastery.objects.filter(
+                user=self.user,
+                skill__name='Listening',
+            ).exists()
         )
-        self.assertEqual(SkillMastery.objects.filter(user=self.user).count(), 1)
-        self.assertEqual(int(mastery.score), 90)
-        self.assertEqual(int(mastery.score), data['score'])
-        self.assertEqual(mastery.level_code, 'B2')
-        self.assertEqual(mastery.status, 'Mastered')
 
-    @patch('agents.voice_services.call_llm_json')
-    def test_listening_evaluate_uses_llm_result_when_available(self, mock_call_llm_json):
+    def test_listening_evaluate_paraphrase_answer_scores_reasonably(self):
         self.authenticate()
-        mock_call_llm_json.return_value = {
-            'score': 75,
-            'feedback': 'You understood the main idea but missed some detail.',
-        }
 
         response = self.client.post(
             '/api/voice-diagnostic/listening/evaluate/',
             {
-                'question': 'What problem did Maria help solve?',
-                'expected_answer': 'A computer problem.',
-                'user_answer': 'A customer problem.',
+                'question': 'What problem did the customer have?',
+                'expected_answer': 'The customer could not connect to the internet.',
+                'user_answer': 'He had no internet connection.',
             },
             format='json',
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = self.assert_success_response(response)
-        self.assertEqual(data['score'], 75)
-        self.assertEqual(data['status'], 'Learning')
-        self.assertEqual(
-            data['feedback'],
-            'You understood the main idea but missed some detail.',
+        self.assertGreaterEqual(data['score'], 75)
+        self.assertIn(data['answer_match'], {'complete', 'partial'})
+        self.assertFalse(
+            SkillMastery.objects.filter(
+                user=self.user,
+                skill__name='Listening',
+            ).exists()
         )
-        mastery = SkillMastery.objects.get(
-            user=self.user,
-            skill__name='Listening',
-        )
-        self.assertEqual(int(mastery.score), 75)
-        self.assertEqual(mastery.status, 'Learning')
 
-    def test_listening_evaluate_requires_user_answer(self):
+    def test_listening_evaluate_empty_answer_scores_very_low(self):
         self.authenticate()
 
         response = self.client.post(
@@ -771,9 +776,822 @@ class AgentMVPAPITests(APITestCase):
             format='json',
         )
 
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertLessEqual(data['score'], 15)
+        self.assertEqual(data['breakdown']['answer_match'], 'none')
+
+    @patch('agents.voice_services.transcribe_audio')
+    def test_pronunciation_preview_does_not_update_mastery(self, mock_transcribe_audio):
+        self.authenticate()
+        mock_transcribe_audio.return_value = 'I practice English every day.'
+        audio_file = SimpleUploadedFile(
+            'pronunciation.webm',
+            b'fake audio',
+            content_type='audio/webm',
+        )
+
+        response = self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate/',
+            {
+                'audio_file': audio_file,
+                'target_sentence': 'I practice English every day.',
+                'update_mastery': 'false',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['score'], 100)
+        self.assertFalse(
+            SkillMastery.objects.filter(
+                user=self.user,
+                skill__name='Pronunciation',
+            ).exists()
+        )
+
+    def test_pronunciation_batch_missing_words_and_substitutions_reduce_scores(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate-batch/',
+            {
+                'items': [
+                    {
+                        'target_sentence': 'I practice English every day.',
+                        'transcript': 'I practice English every day.',
+                    },
+                    {
+                        'target_sentence': 'I practice English every day.',
+                        'transcript': 'I practice English.',
+                    },
+                    {
+                        'target_sentence': 'I practice English every day.',
+                        'transcript': 'I practice Spanish every day.',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        exact_item, missing_item, substituted_item = data['items']
+        self.assertGreater(exact_item['score'], missing_item['score'])
+        self.assertGreater(exact_item['score'], substituted_item['score'])
+        self.assertTrue(missing_item['missing_words'])
+        self.assertTrue(substituted_item['substituted_words'])
+        self.assertEqual(substituted_item['breakdown']['rubric'], 'pronunciation_v2')
+
+    def test_pronunciation_batch_unrelated_and_empty_transcripts_score_low(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate-batch/',
+            {
+                'items': [
+                    {
+                        'target_sentence': 'I practice English every day.',
+                        'transcript': 'The weather is sunny outside.',
+                    },
+                    {
+                        'target_sentence': 'My name is Anna.',
+                        'transcript': '',
+                    },
+                    {
+                        'target_sentence': 'I live in Cebu.',
+                        'transcript': 'I live in Cebu.',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertLessEqual(data['items'][0]['score'], 39)
+        self.assertLessEqual(data['items'][1]['score'], 15)
+
+    def test_listening_batch_partial_unrelated_and_empty_answers_score_lower(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/listening/evaluate-batch/',
+            {
+                'items': [
+                    {
+                        'passage': 'The customer could not connect to the internet.',
+                        'question': 'What problem did the customer have?',
+                        'expected_answer': 'The customer could not connect to the internet.',
+                        'answer': 'No internet connection.',
+                    },
+                    {
+                        'passage': 'The customer could not connect to the internet.',
+                        'question': 'What problem did the customer have?',
+                        'expected_answer': 'The customer could not connect to the internet.',
+                        'answer': 'A customer problem.',
+                    },
+                    {
+                        'passage': 'The customer could not connect to the internet.',
+                        'question': 'What problem did the customer have?',
+                        'expected_answer': 'The customer could not connect to the internet.',
+                        'answer': '',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertGreaterEqual(data['items'][0]['score'], 75)
+        self.assertLessEqual(data['items'][1]['score'], 44)
+        self.assertLessEqual(data['items'][2]['score'], 15)
+        self.assertEqual(data['items'][0]['breakdown']['rubric'], 'listening_v2')
+
+    def test_speaking_batch_short_unrelated_and_filler_answers_affect_scoring(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/speaking/evaluate-batch/',
+            {
+                'items': [
+                    {
+                        'question': 'What is your learning goal?',
+                        'transcript': 'I want better English.',
+                    },
+                    {
+                        'question': 'What is your learning goal?',
+                        'transcript': 'The weather is sunny and the market is busy today.',
+                    },
+                    {
+                        'question': 'What is your learning goal?',
+                        'transcript': 'Um, um, like, you know, actually, I want to improve my English for work.',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertGreaterEqual(data['items'][0]['score'], 40)
+        self.assertLessEqual(data['items'][0]['score'], 74)
+        self.assertLessEqual(data['items'][1]['score'], 39)
+        self.assertLess(
+            data['items'][2]['breakdown']['fluency_signal'],
+            data['items'][0]['breakdown']['fluency_signal'],
+        )
+        self.assertEqual(data['items'][2]['breakdown']['rubric'], 'speaking_v2')
+
+    def test_batch_aggregation_applies_consistency_adjustment(self):
+        aggregated_score, aggregation = _aggregate_batch_scores(
+            [{'score': 95}, {'score': 92}, {'score': 40}]
+        )
+
+        self.assertEqual(aggregation['base_average'], 76)
+        self.assertEqual(aggregation['score_range'], 55)
+        self.assertEqual(aggregation['consistency_adjustment'], -5)
+        self.assertEqual(aggregated_score, 71)
+        self.assertEqual(aggregation['final_score'], 71)
+
+    def test_batch_aggregation_clamps_score_within_zero_to_hundred(self):
+        aggregated_score, aggregation = _aggregate_batch_scores(
+            [{'score': -10}, {'score': 0}, {'score': 0}]
+        )
+
+        self.assertEqual(aggregated_score, 0)
+        self.assertEqual(aggregation['final_score'], 0)
+
+    def start_voice_diagnostic_session_for_test(self):
+        response = self.client.post(
+            '/api/voice-diagnostic/sessions/start/',
+            {},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        return self.assert_success_response(response)
+
+    def pronunciation_batch_payload(self):
+        return {
+            'items': [
+                {
+                    'target_sentence': 'I practice English every day.',
+                    'transcript': 'I practice English every day.',
+                },
+                {
+                    'target_sentence': 'My name is Anna.',
+                    'transcript': 'My Anna.',
+                },
+                {
+                    'target_sentence': 'I live in Cebu.',
+                    'transcript': 'I live Cebu.',
+                },
+            ],
+        }
+
+    def listening_batch_payload(self):
+        return {
+            'items': [
+                {
+                    'passage': 'My name is Anna. I live in Cebu.',
+                    'question': 'Where does Anna live?',
+                    'expected_answer': 'Cebu.',
+                    'answer': 'Cebu.',
+                },
+                {
+                    'passage': 'I study English every morning.',
+                    'question': 'When does the speaker study English?',
+                    'expected_answer': 'Every morning.',
+                    'answer': 'Morning.',
+                },
+                {
+                    'passage': 'Maria likes coffee and bread for breakfast.',
+                    'question': 'What does Maria like for breakfast?',
+                    'expected_answer': 'Coffee and bread.',
+                    'answer': 'Coffee.',
+                },
+            ],
+        }
+
+    def speaking_batch_payload(self):
+        return {
+            'items': [
+                {
+                    'question': 'Introduce yourself in English.',
+                    'transcript': 'My name is Ana and I am learning English for work.',
+                },
+                {
+                    'question': 'Describe your daily routine.',
+                    'transcript': 'I wake up early and work all day.',
+                },
+                {
+                    'question': 'What is your learning goal?',
+                    'transcript': 'I want to improve my English speaking because I need it at work.',
+                },
+            ],
+        }
+
+    def expected_recommended_focus(self, pronunciation_score, listening_score, speaking_score):
+        ordered_scores = [
+            ('Pronunciation', pronunciation_score),
+            ('Listening', listening_score),
+            ('Speaking', speaking_score),
+        ]
+        ordered_scores.sort(key=lambda item: item[1])
+        return ordered_scores[0][0]
+
+    def test_voice_diagnostic_session_start_creates_in_progress_session(self):
+        self.authenticate()
+
+        data = self.start_voice_diagnostic_session_for_test()
+
+        session = VoiceDiagnosticSession.objects.get(pk=data['session_id'])
+        self.assertEqual(session.user, self.user)
+        self.assertEqual(session.status, VoiceDiagnosticSession.STATUS_IN_PROGRESS)
+        self.assertIsNotNone(session.started_at)
+        self.assertEqual(data['status'], VoiceDiagnosticSession.STATUS_IN_PROGRESS)
+
+    def test_pronunciation_batch_saves_voice_diagnostic_items(self):
+        self.authenticate()
+        session_data = self.start_voice_diagnostic_session_for_test()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate-batch/',
+            {
+                **self.pronunciation_batch_payload(),
+                'session_id': session_data['session_id'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        session = VoiceDiagnosticSession.objects.get(pk=session_data['session_id'])
+        items = list(
+            VoiceDiagnosticItem.objects.filter(
+                session=session,
+                skill='Pronunciation',
+            ).order_by('item_number')
+        )
+        self.assertEqual(len(items), 3)
+        self.assertEqual(session.status, VoiceDiagnosticSession.STATUS_IN_PROGRESS)
+        self.assertEqual(int(session.pronunciation_score), data['final_score'])
+        self.assertEqual(items[0].task_type, 'repeat_sentence')
+        self.assertEqual(items[0].target_text, 'I practice English every day.')
+        self.assertEqual(items[0].transcript, 'I practice English every day.')
+        self.assertEqual(items[0].details['rubric'], 'pronunciation_v2')
+        self.assertIn('score_reasons', items[0].details)
+        self.assertIn('aggregation', session.metadata['skill_results']['pronunciation'])
+        self.assertEqual(data['session_id'], session.id)
+        self.assertEqual(data['session_status'], VoiceDiagnosticSession.STATUS_IN_PROGRESS)
+
+    def test_listening_batch_saves_voice_diagnostic_items(self):
+        self.authenticate()
+        session_data = self.start_voice_diagnostic_session_for_test()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/listening/evaluate-batch/',
+            {
+                **self.listening_batch_payload(),
+                'session_id': session_data['session_id'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        session = VoiceDiagnosticSession.objects.get(pk=session_data['session_id'])
+        items = list(
+            VoiceDiagnosticItem.objects.filter(
+                session=session,
+                skill='Listening',
+            ).order_by('item_number')
+        )
+        self.assertEqual(len(items), 3)
+        self.assertEqual(int(session.listening_score), data['final_score'])
+        self.assertEqual(items[0].passage_text, 'My name is Anna. I live in Cebu.')
+        self.assertEqual(items[0].question_text, 'Where does Anna live?')
+        self.assertEqual(items[0].expected_answer, 'Cebu.')
+        self.assertEqual(items[0].user_answer, 'Cebu.')
+        self.assertEqual(items[0].details['rubric'], 'listening_v2')
+        self.assertEqual(items[0].details['answer_match'], 'complete')
+
+    def test_speaking_batch_saves_voice_diagnostic_items(self):
+        self.authenticate()
+        session_data = self.start_voice_diagnostic_session_for_test()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/speaking/evaluate-batch/',
+            {
+                **self.speaking_batch_payload(),
+                'session_id': session_data['session_id'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        session = VoiceDiagnosticSession.objects.get(pk=session_data['session_id'])
+        items = list(
+            VoiceDiagnosticItem.objects.filter(
+                session=session,
+                skill='Speaking',
+            ).order_by('item_number')
+        )
+        self.assertEqual(len(items), 3)
+        self.assertEqual(int(session.speaking_score), data['final_score'])
+        self.assertEqual(items[0].question_text, 'Introduce yourself in English.')
+        self.assertTrue(items[0].transcript)
+        self.assertEqual(items[0].details['rubric'], 'speaking_v2')
+        self.assertTrue(items[0].details['strengths'])
+        self.assertTrue(items[0].details['improvement_areas'])
+
+    def test_voice_diagnostic_session_completes_and_preserves_skill_mastery(self):
+        self.authenticate()
+        session_data = self.start_voice_diagnostic_session_for_test()
+        session_id = session_data['session_id']
+
+        pronunciation_response = self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate-batch/',
+            {
+                **self.pronunciation_batch_payload(),
+                'session_id': session_id,
+            },
+            format='json',
+        )
+        listening_response = self.client.post(
+            '/api/voice-diagnostic/listening/evaluate-batch/',
+            {
+                **self.listening_batch_payload(),
+                'session_id': session_id,
+            },
+            format='json',
+        )
+        speaking_response = self.client.post(
+            '/api/voice-diagnostic/speaking/evaluate-batch/',
+            {
+                **self.speaking_batch_payload(),
+                'session_id': session_id,
+            },
+            format='json',
+        )
+
+        self.assertEqual(pronunciation_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(listening_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(speaking_response.status_code, status.HTTP_200_OK)
+        pronunciation_data = self.assert_success_response(pronunciation_response)
+        listening_data = self.assert_success_response(listening_response)
+        speaking_data = self.assert_success_response(speaking_response)
+
+        session = VoiceDiagnosticSession.objects.get(pk=session_id)
+        self.assertEqual(session.status, VoiceDiagnosticSession.STATUS_COMPLETED)
+        self.assertEqual(int(session.pronunciation_score), pronunciation_data['final_score'])
+        self.assertEqual(int(session.listening_score), listening_data['final_score'])
+        self.assertEqual(int(session.speaking_score), speaking_data['final_score'])
+        expected_focus = self.expected_recommended_focus(
+            pronunciation_data['final_score'],
+            listening_data['final_score'],
+            speaking_data['final_score'],
+        )
+        self.assertEqual(session.recommended_focus, expected_focus)
+        self.assertEqual(
+            session.summary,
+            (
+                f'{expected_focus} is your recommended focus. Practice with the '
+                f'{expected_focus} Teacher Session, then retake the Voice Diagnostic later.'
+            ),
+        )
+        self.assertIsNotNone(session.completed_at)
+        self.assertEqual(
+            VoiceDiagnosticItem.objects.filter(session=session).count(),
+            9,
+        )
+        self.assertEqual(speaking_data['session_status'], VoiceDiagnosticSession.STATUS_COMPLETED)
+        self.assertEqual(speaking_data['recommended_focus'], expected_focus)
+        self.assertEqual(
+            SkillMastery.objects.get(user=self.user, skill__name='Pronunciation').score,
+            pronunciation_data['final_score'],
+        )
+        self.assertEqual(
+            SkillMastery.objects.get(user=self.user, skill__name='Listening').score,
+            listening_data['final_score'],
+        )
+        self.assertEqual(
+            SkillMastery.objects.get(user=self.user, skill__name='Speaking').score,
+            speaking_data['final_score'],
+        )
+        self.assertIn('aggregation', session.metadata['skill_results']['speaking'])
+
+    def test_voice_diagnostic_session_list_is_private_to_authenticated_user(self):
+        self.authenticate()
+        own_session = VoiceDiagnosticSession.objects.create(user=self.user, status='completed')
+        VoiceDiagnosticSession.objects.create(user=self.other_user, status='completed')
+
+        response = self.client.get('/api/voice-diagnostic/sessions/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual([entry['id'] for entry in data], [own_session.id])
+
+    def test_voice_diagnostic_session_detail_returns_only_owned_session(self):
+        self.authenticate()
+        session = VoiceDiagnosticSession.objects.create(
+            user=self.user,
+            status='completed',
+            recommended_focus='Pronunciation',
+            summary='Pronunciation is your recommended focus based on this voice diagnostic.',
+        )
+        VoiceDiagnosticItem.objects.create(
+            session=session,
+            skill='Pronunciation',
+            item_number=1,
+            task_type='repeat_sentence',
+            target_text='I practice English every day.',
+            transcript='I practice English every day.',
+            score=95,
+            feedback='Excellent repetition.',
+            details={'word_accuracy': 100},
+        )
+
+        response = self.client.get(f'/api/voice-diagnostic/sessions/{session.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['id'], session.id)
+        self.assertEqual(len(data['items']), 1)
+        self.assertEqual(data['items'][0]['skill'], 'Pronunciation')
+        self.assertEqual(data['items'][0]['score'], 95)
+
+    def test_voice_diagnostic_session_detail_rejects_other_users_session(self):
+        self.authenticate()
+        other_session = VoiceDiagnosticSession.objects.create(user=self.other_user, status='completed')
+
+        response = self.client.get(f'/api/voice-diagnostic/sessions/{other_session.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_voice_diagnostic_report_returns_completed_session_scores(self):
+        self.authenticate()
+        session_data = self.start_voice_diagnostic_session_for_test()
+        session_id = session_data['session_id']
+        self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate-batch/',
+            {
+                **self.pronunciation_batch_payload(),
+                'session_id': session_id,
+            },
+            format='json',
+        )
+        self.client.post(
+            '/api/voice-diagnostic/listening/evaluate-batch/',
+            {
+                **self.listening_batch_payload(),
+                'session_id': session_id,
+            },
+            format='json',
+        )
+        speaking_response = self.client.post(
+            '/api/voice-diagnostic/speaking/evaluate-batch/',
+            {
+                **self.speaking_batch_payload(),
+                'session_id': session_id,
+            },
+            format='json',
+        )
+        speaking_data = self.assert_success_response(speaking_response)
+
+        response = self.client.get(f'/api/voice-diagnostic/sessions/{session_id}/report/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertTrue(data['official_mastery_updated'])
+        self.assertEqual(data['status'], VoiceDiagnosticSession.STATUS_COMPLETED)
+        self.assertEqual(
+            data['scores'],
+            {
+                'Pronunciation': int(SkillMastery.objects.get(
+                    user=self.user,
+                    skill__name='Pronunciation',
+                ).score),
+                'Listening': int(SkillMastery.objects.get(
+                    user=self.user,
+                    skill__name='Listening',
+                ).score),
+                'Speaking': int(SkillMastery.objects.get(
+                    user=self.user,
+                    skill__name='Speaking',
+                ).score),
+            },
+        )
+        self.assertEqual(data['recommended_focus'], speaking_data['recommended_focus'])
+        self.assertTrue(data['recommended_focus_reason'])
+        self.assertEqual(len(data['skill_breakdown']), 3)
+        self.assertEqual(data['recommendation_href'], '/recommendation')
+        self.assertEqual(data['history_href'], '/voice-diagnostic/history')
+        self.assertEqual(data['dashboard_href'], '/dashboard')
+
+    def test_voice_diagnostic_report_returns_safe_message_for_incomplete_session(self):
+        self.authenticate()
+        session_data = self.start_voice_diagnostic_session_for_test()
+
+        response = self.client.get(
+            f"/api/voice-diagnostic/sessions/{session_data['session_id']}/report/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertFalse(data['official_mastery_updated'])
+        self.assertEqual(data['status'], VoiceDiagnosticSession.STATUS_IN_PROGRESS)
+        self.assertEqual(
+            data['message'],
+            'Complete all voice diagnostic sections to view your final report.',
+        )
+
+    def test_voice_diagnostic_report_rejects_other_users_session(self):
+        self.authenticate()
+        other_session = VoiceDiagnosticSession.objects.create(user=self.other_user, status='completed')
+
+        response = self.client.get(f'/api/voice-diagnostic/sessions/{other_session.id}/report/')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_voice_diagnostic_report_maps_pronunciation_focus_to_pronunciation_teacher(self):
+        self.authenticate()
+        session = VoiceDiagnosticSession.objects.create(
+            user=self.user,
+            status=VoiceDiagnosticSession.STATUS_COMPLETED,
+            pronunciation_score=42,
+            listening_score=70,
+            speaking_score=88,
+            recommended_focus='Pronunciation',
+            summary='Pronunciation is your recommended focus.',
+        )
+
+        response = self.client.get(f'/api/voice-diagnostic/sessions/{session.id}/report/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['next_teacher_session']['href'], '/pronunciation-teacher')
+
+    def test_voice_diagnostic_report_maps_listening_focus_to_listening_teacher(self):
+        self.authenticate()
+        session = VoiceDiagnosticSession.objects.create(
+            user=self.user,
+            status=VoiceDiagnosticSession.STATUS_COMPLETED,
+            pronunciation_score=78,
+            listening_score=62,
+            speaking_score=88,
+            recommended_focus='Listening',
+            summary='Listening is your recommended focus.',
+        )
+
+        response = self.client.get(f'/api/voice-diagnostic/sessions/{session.id}/report/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['next_teacher_session']['href'], '/listening-teacher')
+
+    def test_voice_diagnostic_report_maps_speaking_focus_to_speaking_teacher(self):
+        self.authenticate()
+        session = VoiceDiagnosticSession.objects.create(
+            user=self.user,
+            status=VoiceDiagnosticSession.STATUS_COMPLETED,
+            pronunciation_score=78,
+            listening_score=82,
+            speaking_score=61,
+            recommended_focus='Speaking',
+            summary='Speaking is your recommended focus.',
+        )
+
+        response = self.client.get(f'/api/voice-diagnostic/sessions/{session.id}/report/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['next_teacher_session']['href'], '/speaking-teacher')
+
+    def test_speaking_teacher_sessions_do_not_update_skill_mastery(self):
+        self.authenticate()
+        speaking_skill = self.skills['Speaking']
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=speaking_skill,
+            level_code='A2',
+            score=72,
+            status='Learning',
+        )
+
+        start_response = self.client.post(
+            '/api/teacher/speaking/sessions/start/',
+            {},
+            format='json',
+        )
+        self.assertEqual(start_response.status_code, status.HTTP_201_CREATED)
+        start_data = self.assert_success_response(start_response)
+        session_id = start_data['session_id']
+
+        for transcript in [
+            'My name is Ana and I want to improve my English for work.',
+            'I usually wake up early and study before I start work.',
+            'My learning goal is to speak more clearly in meetings.',
+        ]:
+            answer_response = self.client.post(
+                f'/api/teacher/speaking/sessions/{session_id}/answer/',
+                {'transcript': transcript},
+                format='json',
+            )
+            self.assertEqual(answer_response.status_code, status.HTTP_200_OK)
+
+        mastery = SkillMastery.objects.get(user=self.user, skill=speaking_skill)
+        self.assertEqual(int(mastery.score), 72)
+        self.assertEqual(mastery.level_code, 'A2')
+        self.assertEqual(
+            SkillMastery.objects.filter(user=self.user, skill=speaking_skill).count(),
+            1,
+        )
+
+    def test_pronunciation_batch_requires_exactly_three_items(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate-batch/',
+            {
+                'items': [
+                    {
+                        'target_sentence': 'I practice English every day.',
+                        'transcript': 'I practice English every day.',
+                    },
+                ],
+            },
+            format='json',
+        )
+
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(response.data['success'])
-        self.assertEqual(response.data['error'], 'user_answer must be a non-empty string.')
+        self.assertEqual(
+            response.data['error'],
+            'pronunciation items must contain exactly 3 entries.',
+        )
+
+    def test_pronunciation_batch_aggregates_scores_and_updates_mastery_once(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate-batch/',
+            {
+                'items': [
+                    {
+                        'target_sentence': 'I practice English every day.',
+                        'transcript': 'I practice English every day.',
+                    },
+                    {
+                        'target_sentence': 'My name is Anna.',
+                        'transcript': 'My Anna.',
+                    },
+                    {
+                        'target_sentence': 'I live in Cebu.',
+                        'transcript': 'I live Cebu.',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(len(data['items']), 3)
+        self.assertTrue(all('breakdown' in item for item in data['items']))
+        expected_base_average = round(sum(item['score'] for item in data['items']) / 3)
+        self.assertEqual(data['aggregation']['base_average'], expected_base_average)
+        self.assertEqual(
+            data['final_score'],
+            data['aggregation']['final_score'],
+        )
+        mastery = SkillMastery.objects.get(user=self.user, skill__name='Pronunciation')
+        self.assertEqual(SkillMastery.objects.filter(user=self.user, skill__name='Pronunciation').count(), 1)
+        self.assertEqual(int(mastery.score), data['final_score'])
+        self.assertEqual(mastery.level_code, data['level_code'])
+        self.assertEqual(mastery.status, data['status'])
+
+    def test_listening_batch_aggregates_scores_and_updates_mastery_once(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/listening/evaluate-batch/',
+            {
+                'items': [
+                    {
+                        'passage': 'My name is Anna. I live in Cebu.',
+                        'question': 'Where does Anna live?',
+                        'expected_answer': 'Cebu.',
+                        'answer': 'Cebu.',
+                    },
+                    {
+                        'passage': 'I study English every morning.',
+                        'question': 'When does the speaker study English?',
+                        'expected_answer': 'Every morning.',
+                        'answer': 'Morning.',
+                    },
+                    {
+                        'passage': 'Maria likes coffee and bread for breakfast.',
+                        'question': 'What does Maria like for breakfast?',
+                        'expected_answer': 'Coffee and bread.',
+                        'answer': 'Coffee.',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(len(data['items']), 3)
+        self.assertTrue(all('breakdown' in item for item in data['items']))
+        self.assertEqual(
+            data['final_score'],
+            data['aggregation']['final_score'],
+        )
+        self.assertEqual(data['items'][0]['answer_match'], 'complete')
+        mastery = SkillMastery.objects.get(user=self.user, skill__name='Listening')
+        self.assertEqual(SkillMastery.objects.filter(user=self.user, skill__name='Listening').count(), 1)
+        self.assertEqual(int(mastery.score), data['final_score'])
+        self.assertEqual(mastery.level_code, data['level_code'])
+        self.assertEqual(mastery.status, data['status'])
+
+    def test_speaking_batch_aggregates_scores_and_updates_mastery_once(self):
+        self.authenticate()
+
+        response = self.client.post(
+            '/api/voice-diagnostic/speaking/evaluate-batch/',
+            {
+                'items': [
+                    {
+                        'question': 'Introduce yourself in English.',
+                        'transcript': 'My name is Ana and I am learning English for work.',
+                    },
+                    {
+                        'question': 'Describe your daily routine.',
+                        'transcript': 'I wake up early and work all day.',
+                    },
+                    {
+                        'question': 'What is your learning goal?',
+                        'transcript': 'I want to improve my English speaking because I need it at work.',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(len(data['items']), 3)
+        self.assertTrue(all('breakdown' in item for item in data['items']))
+        self.assertEqual(data['final_score'], data['aggregation']['final_score'])
+        mastery = SkillMastery.objects.get(user=self.user, skill__name='Speaking')
+        self.assertEqual(SkillMastery.objects.filter(user=self.user, skill__name='Speaking').count(), 1)
+        self.assertEqual(int(mastery.score), data['final_score'])
+        self.assertEqual(mastery.status, data['status'])
 
     def test_recommendation_and_dashboard_reuse_same_module(self):
         self.authenticate()
@@ -822,20 +1640,80 @@ class AgentMVPAPITests(APITestCase):
         self.assertEqual(
             recommendation_data['diagnostic_scores'],
             {
-                'Vocabulary': 62,
                 'Grammar': 45,
+                'Vocabulary': 62,
                 'Listening': 58,
                 'Speaking': 75,
+                'Pronunciation': None,
             },
         )
         self.assertEqual(
             recommendation_data['current_skill_scores'],
             recommendation_data['diagnostic_scores'],
         )
+        self.assertEqual(recommendation_data['recommended_focus'], 'Grammar')
+        self.assertEqual(recommendation_data['recommended_action']['type'], 'module')
         self.assertEqual(recommendation_data['learner_level'], 'A2')
         self.assertEqual(recommendation_data['module_level'], 'A2')
         self.assertFalse(recommendation_data['fallback_used'])
         self.assertIsNone(recommendation_data['fallback_reason'])
+
+    def test_recommendation_reads_latest_voice_skill_mastery_after_voice_diagnostic(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Grammar'],
+            level_code='A2',
+            score=88,
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Vocabulary'],
+            level_code='A2',
+            score=82,
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Listening'],
+            level_code='A2',
+            score=90,
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Speaking'],
+            level_code='A2',
+            score=87,
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Pronunciation'],
+            level_code='A2',
+            score=91,
+        )
+        session_data = self.start_voice_diagnostic_session_for_test()
+        self.client.post(
+            '/api/voice-diagnostic/pronunciation/evaluate-batch/',
+            {
+                **self.pronunciation_batch_payload(),
+                'session_id': session_data['session_id'],
+            },
+            format='json',
+        )
+
+        response = self.client.get('/api/curriculum/recommendation/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['recommended_focus'], 'Pronunciation')
+        self.assertEqual(data['weakest_skill'], 'Pronunciation')
+        self.assertEqual(data['recommended_module'], None)
+        self.assertEqual(data['recommended_action']['type'], 'teacher_session')
+        self.assertEqual(data['recommended_action']['href'], '/pronunciation-teacher')
+        self.assertEqual(
+            data['current_skill_scores']['Pronunciation'],
+            int(SkillMastery.objects.get(user=self.user, skill__name='Pronunciation').score),
+        )
 
     def test_recommendation_prefers_exact_current_level_module_for_same_skill(self):
         self.authenticate()
@@ -1423,6 +2301,598 @@ class AgentMVPAPITests(APITestCase):
         speaking_mastery.refresh_from_db()
         self.assertEqual(int(speaking_mastery.score), 68)
 
+    def test_pronunciation_teacher_session_start_reads_official_mastery_without_updating_it(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        mastery = SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Pronunciation'],
+            level_code='B1',
+            score=78,
+            status='Learning',
+        )
+        original_last_updated = mastery.last_updated
+
+        response = self.client.post(
+            '/api/teacher/pronunciation/sessions/start/',
+            {},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['session_mode'], 'pronunciation')
+        self.assertEqual(data['skill'], 'Pronunciation')
+        self.assertTrue(data['official_mastery_assessed'])
+        self.assertEqual(data['official_mastery_score'], 78)
+        self.assertEqual(data['official_mastery_level'], 'B1')
+        self.assertEqual(data['current_task']['task_type'], 'repeat_sentence')
+        self.assertTrue(data['current_task']['target_text'])
+        self.assertTrue(data['current_task']['target_focus'])
+
+        mastery.refresh_from_db()
+        self.assertEqual(mastery.last_updated, original_last_updated)
+
+        lesson_session = LessonSession.objects.get(pk=data['session_id'])
+        self.assertEqual(lesson_session.session_mode, LessonSession.SESSION_MODE_PRONUNCIATION)
+        self.assertEqual(
+            lesson_session.study_session.session_type,
+            'pronunciation_teacher_session',
+        )
+        self.assertIsNone(lesson_session.study_session.module)
+
+    def test_pronunciation_teacher_session_exact_repetition_scores_high_and_creates_turn(self):
+        self.authenticate()
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Pronunciation'],
+            level_code='A1',
+            score=55,
+            status='Learning',
+        )
+        start_response = self.client.post(
+            '/api/teacher/pronunciation/sessions/start/',
+            {},
+            format='json',
+        )
+        session_data = self.assert_success_response(start_response)
+        target_text = session_data['current_task']['target_text']
+
+        response = self.client.post(
+            f"/api/teacher/pronunciation/sessions/{session_data['session_id']}/answer/",
+            {'transcript': target_text},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertFalse(data['completed'])
+        self.assertGreaterEqual(data['turn']['score'], 95)
+        self.assertEqual(data['turn']['word_accuracy'], 100)
+        self.assertEqual(data['turn']['missing_words'], [])
+        self.assertEqual(data['turn']['extra_words'], [])
+        self.assertEqual(data['turn']['substituted_words'], [])
+        turn = LessonTurn.objects.get(session_id=session_data['session_id'], turn_number=1)
+        self.assertEqual(turn.target_text, target_text)
+        self.assertEqual(turn.student_answer, target_text)
+
+    def test_pronunciation_teacher_session_reports_missing_and_substituted_words(self):
+        self.authenticate()
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Pronunciation'],
+            level_code='A1',
+            score=55,
+            status='Learning',
+        )
+        start_response = self.client.post(
+            '/api/teacher/pronunciation/sessions/start/',
+            {},
+            format='json',
+        )
+        session_data = self.assert_success_response(start_response)
+
+        response = self.client.post(
+            f"/api/teacher/pronunciation/sessions/{session_data['session_id']}/answer/",
+            {'transcript': 'My work is Anna'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertLess(data['turn']['score'], 95)
+        self.assertIn('name', data['turn']['missing_words'])
+        self.assertIn('work', data['turn']['extra_words'])
+        self.assertEqual(
+            data['turn']['substituted_words'][0],
+            {'expected': 'name', 'heard': 'work'},
+        )
+
+    def test_pronunciation_teacher_session_transcript_fallback_completes_without_mastery_update(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        mastery = SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Pronunciation'],
+            level_code='B1',
+            score=78,
+            status='Learning',
+        )
+        original_last_updated = mastery.last_updated
+
+        start_response = self.client.post(
+            '/api/teacher/pronunciation/sessions/start/',
+            {},
+            format='json',
+        )
+        self.assertEqual(start_response.status_code, status.HTTP_201_CREATED)
+        session_data = self.assert_success_response(start_response)
+
+        transcripts = [
+            'I solved the problem because I checked the network settings.',
+            'Although the task was difficult, I finished it on time.',
+            'I want to improve my English so I can communicate more clearly.',
+        ]
+
+        final_data = None
+        for transcript in transcripts:
+            answer_response = self.client.post(
+                f"/api/teacher/pronunciation/sessions/{session_data['session_id']}/answer/",
+                {'transcript': transcript},
+                format='json',
+            )
+            self.assertEqual(answer_response.status_code, status.HTTP_200_OK)
+            final_data = self.assert_success_response(answer_response)
+
+        self.assertIsNotNone(final_data)
+        self.assertTrue(final_data['completed'])
+        self.assertEqual(final_data['final_result']['label'], 'Practice Score')
+        self.assertIn(
+            'Pronunciation Diagnostic',
+            final_data['final_result']['next_suggestion'],
+        )
+
+        detail_response = self.client.get(
+            f"/api/teacher/pronunciation/sessions/{session_data['session_id']}/"
+        )
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        detail_data = self.assert_success_response(detail_response)
+        self.assertEqual(detail_data['status'], 'completed')
+        self.assertEqual(len(detail_data['turns']), 3)
+        self.assertIsNone(detail_data['current_task'])
+        self.assertEqual(detail_data['final_result']['label'], 'Practice Score')
+
+        lesson_session = LessonSession.objects.get(pk=session_data['session_id'])
+        study_session = lesson_session.study_session
+        self.assertEqual(
+            lesson_session.session_mode,
+            LessonSession.SESSION_MODE_PRONUNCIATION,
+        )
+        self.assertEqual(LessonTurn.objects.filter(session=lesson_session).count(), 3)
+        self.assertEqual(
+            int(lesson_session.final_score),
+            final_data['final_result']['practice_score'],
+        )
+        self.assertEqual(
+            int(study_session.score),
+            final_data['final_result']['practice_score'],
+        )
+        self.assertIsNotNone(study_session.completed_at)
+
+        mastery.refresh_from_db()
+        self.assertEqual(int(mastery.score), 78)
+        self.assertEqual(mastery.level_code, 'B1')
+        self.assertEqual(mastery.status, 'Learning')
+        self.assertEqual(mastery.last_updated, original_last_updated)
+        self.assertEqual(LearnerProfile.objects.get(user=self.user).current_level, 'A2')
+
+        dashboard_response = self.client.get('/api/dashboard/')
+        self.assertEqual(dashboard_response.status_code, status.HTTP_200_OK)
+        dashboard_data = self.assert_success_response(dashboard_response)
+        pronunciation_mastery = next(
+            item for item in dashboard_data['skill_mastery']
+            if item['skill']['name'] == 'Pronunciation'
+        )
+        self.assertEqual(pronunciation_mastery['score'], '78.00')
+
+    def test_pronunciation_teacher_session_access_is_limited_to_owner(self):
+        pronunciation_mastery = SkillMastery.objects.create(
+            user=self.other_user,
+            skill=self.skills['Pronunciation'],
+            level_code='A2',
+            score=66,
+            status='Learning',
+        )
+        self.client.force_authenticate(self.other_user)
+        start_response = self.client.post(
+            '/api/teacher/pronunciation/sessions/start/',
+            {},
+            format='json',
+        )
+        self.assertEqual(start_response.status_code, status.HTTP_201_CREATED)
+        session_data = self.assert_success_response(start_response)
+
+        self.authenticate()
+        detail_response = self.client.get(
+            f"/api/teacher/pronunciation/sessions/{session_data['session_id']}/"
+        )
+        answer_response = self.client.post(
+            f"/api/teacher/pronunciation/sessions/{session_data['session_id']}/answer/",
+            {'transcript': 'My name is Anna.'},
+            format='json',
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(answer_response.status_code, status.HTTP_404_NOT_FOUND)
+        pronunciation_mastery.refresh_from_db()
+        self.assertEqual(int(pronunciation_mastery.score), 66)
+
+    def test_listening_teacher_session_start_reads_official_mastery_without_updating_it(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        mastery = SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Listening'],
+            level_code='B1',
+            score=70,
+            status='Learning',
+        )
+        original_last_updated = mastery.last_updated
+
+        response = self.client.post(
+            '/api/teacher/listening/sessions/start/',
+            {},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['session_mode'], 'listening')
+        self.assertEqual(data['skill'], 'Listening')
+        self.assertTrue(data['official_mastery_assessed'])
+        self.assertEqual(data['official_mastery_score'], 70)
+        self.assertEqual(data['official_mastery_level'], 'B1')
+        self.assertEqual(data['current_task']['task_type'], 'detail_question')
+        self.assertTrue(data['current_task']['passage_text'])
+        self.assertTrue(data['current_task']['question_text'])
+        self.assertIsNone(data['current_task']['audio_url'])
+
+        mastery.refresh_from_db()
+        self.assertEqual(mastery.last_updated, original_last_updated)
+
+        lesson_session = LessonSession.objects.get(pk=data['session_id'])
+        self.assertEqual(lesson_session.session_mode, LessonSession.SESSION_MODE_LISTENING)
+        self.assertEqual(
+            lesson_session.study_session.session_type,
+            'listening_teacher_session',
+        )
+        self.assertIsNone(lesson_session.study_session.module)
+
+    def test_listening_teacher_session_complete_answer_scores_high_and_creates_turn(self):
+        self.authenticate()
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Listening'],
+            level_code='B1',
+            score=70,
+            status='Learning',
+        )
+        start_response = self.client.post(
+            '/api/teacher/listening/sessions/start/',
+            {},
+            format='json',
+        )
+        session_data = self.assert_success_response(start_response)
+
+        response = self.client.post(
+            f"/api/teacher/listening/sessions/{session_data['session_id']}/answer/",
+            {'answer': 'The customer could not connect to the internet.'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertFalse(data['completed'])
+        self.assertGreaterEqual(data['turn']['score'], 90)
+        self.assertEqual(data['turn']['answer_match'], 'complete')
+        self.assertEqual(data['turn']['missing_keywords'], [])
+        self.assertIn('internet', data['turn']['matched_keywords'])
+        turn = LessonTurn.objects.get(session_id=session_data['session_id'], turn_number=1)
+        self.assertEqual(turn.target_text, 'The customer could not connect to the internet.')
+        self.assertEqual(turn.student_answer, 'The customer could not connect to the internet.')
+
+    def test_listening_teacher_session_partial_answer_returns_missing_keywords(self):
+        self.authenticate()
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Listening'],
+            level_code='B1',
+            score=70,
+            status='Learning',
+        )
+        start_response = self.client.post(
+            '/api/teacher/listening/sessions/start/',
+            {},
+            format='json',
+        )
+        session_data = self.assert_success_response(start_response)
+
+        response = self.client.post(
+            f"/api/teacher/listening/sessions/{session_data['session_id']}/answer/",
+            {'answer': 'connect internet'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['turn']['answer_match'], 'partial')
+        self.assertGreaterEqual(data['turn']['score'], 50)
+        self.assertLess(data['turn']['score'], 90)
+        self.assertIn('connect', data['turn']['matched_keywords'])
+        self.assertIn('internet', data['turn']['matched_keywords'])
+        self.assertIn('customer', data['turn']['missing_keywords'])
+
+    def test_listening_teacher_session_unrelated_answer_scores_low(self):
+        self.authenticate()
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Listening'],
+            level_code='B1',
+            score=70,
+            status='Learning',
+        )
+        start_response = self.client.post(
+            '/api/teacher/listening/sessions/start/',
+            {},
+            format='json',
+        )
+        session_data = self.assert_success_response(start_response)
+
+        response = self.client.post(
+            f"/api/teacher/listening/sessions/{session_data['session_id']}/answer/",
+            {'answer': 'I like pizza and music.'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data['turn']['answer_match'], 'unrelated')
+        self.assertLessEqual(data['turn']['score'], 45)
+        self.assertFalse(data['turn']['matched_keywords'])
+
+    def test_listening_teacher_session_text_fallback_completes_without_mastery_update(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        mastery = SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Listening'],
+            level_code='B1',
+            score=70,
+            status='Learning',
+        )
+        original_last_updated = mastery.last_updated
+
+        start_response = self.client.post(
+            '/api/teacher/listening/sessions/start/',
+            {},
+            format='json',
+        )
+        self.assertEqual(start_response.status_code, status.HTTP_201_CREATED)
+        session_data = self.assert_success_response(start_response)
+
+        answers = [
+            'The customer could not connect to the internet.',
+            'The network settings.',
+            'Restarting the router.',
+        ]
+
+        final_data = None
+        for answer in answers:
+            answer_response = self.client.post(
+                f"/api/teacher/listening/sessions/{session_data['session_id']}/answer/",
+                {'answer': answer},
+                format='json',
+            )
+            self.assertEqual(answer_response.status_code, status.HTTP_200_OK)
+            final_data = self.assert_success_response(answer_response)
+
+        self.assertIsNotNone(final_data)
+        self.assertTrue(final_data['completed'])
+        self.assertEqual(final_data['final_result']['label'], 'Practice Score')
+        self.assertIn(
+            'Listening Diagnostic',
+            final_data['final_result']['next_suggestion'],
+        )
+
+        detail_response = self.client.get(
+            f"/api/teacher/listening/sessions/{session_data['session_id']}/"
+        )
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        detail_data = self.assert_success_response(detail_response)
+        self.assertEqual(detail_data['status'], 'completed')
+        self.assertEqual(len(detail_data['turns']), 3)
+        self.assertIsNone(detail_data['current_task'])
+        self.assertEqual(detail_data['final_result']['label'], 'Practice Score')
+
+        lesson_session = LessonSession.objects.get(pk=session_data['session_id'])
+        study_session = lesson_session.study_session
+        self.assertEqual(
+            lesson_session.session_mode,
+            LessonSession.SESSION_MODE_LISTENING,
+        )
+        self.assertEqual(LessonTurn.objects.filter(session=lesson_session).count(), 3)
+        self.assertEqual(
+            int(lesson_session.final_score),
+            final_data['final_result']['practice_score'],
+        )
+        self.assertEqual(
+            int(study_session.score),
+            final_data['final_result']['practice_score'],
+        )
+        self.assertIsNotNone(study_session.completed_at)
+
+        mastery.refresh_from_db()
+        self.assertEqual(int(mastery.score), 70)
+        self.assertEqual(mastery.level_code, 'B1')
+        self.assertEqual(mastery.status, 'Learning')
+        self.assertEqual(mastery.last_updated, original_last_updated)
+        self.assertEqual(LearnerProfile.objects.get(user=self.user).current_level, 'A2')
+
+        dashboard_response = self.client.get('/api/dashboard/')
+        self.assertEqual(dashboard_response.status_code, status.HTTP_200_OK)
+        dashboard_data = self.assert_success_response(dashboard_response)
+        listening_mastery = next(
+            item for item in dashboard_data['skill_mastery']
+            if item['skill']['name'] == 'Listening'
+        )
+        self.assertEqual(listening_mastery['score'], '70.00')
+
+    def test_listening_teacher_session_access_is_limited_to_owner(self):
+        listening_mastery = SkillMastery.objects.create(
+            user=self.other_user,
+            skill=self.skills['Listening'],
+            level_code='A2',
+            score=64,
+            status='Learning',
+        )
+        self.client.force_authenticate(self.other_user)
+        start_response = self.client.post(
+            '/api/teacher/listening/sessions/start/',
+            {},
+            format='json',
+        )
+        self.assertEqual(start_response.status_code, status.HTTP_201_CREATED)
+        session_data = self.assert_success_response(start_response)
+
+        self.authenticate()
+        detail_response = self.client.get(
+            f"/api/teacher/listening/sessions/{session_data['session_id']}/"
+        )
+        answer_response = self.client.post(
+            f"/api/teacher/listening/sessions/{session_data['session_id']}/answer/",
+            {'answer': 'The customer could not connect to the internet.'},
+            format='json',
+        )
+
+        self.assertEqual(detail_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(answer_response.status_code, status.HTTP_404_NOT_FOUND)
+        listening_mastery.refresh_from_db()
+        self.assertEqual(int(listening_mastery.score), 64)
+
+    def test_study_plan_routes_listening_focus_to_listening_teacher(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Listening'],
+            level_code='A2',
+            score=30,
+            status='Needs Review',
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Grammar'],
+            level_code='A2',
+            score=42,
+            status='Needs Review',
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Pronunciation'],
+            level_code='A2',
+            score=74,
+            status='Learning',
+        )
+
+        response = self.client.post('/api/scheduler/generate-plan/', {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = self.assert_success_response(response)
+        listening_item = next(
+            item for item in data['plan']['items']
+            if item['skill'] == 'Listening'
+        )
+        self.assertEqual(listening_item['title'], 'Listening Teacher Session')
+        self.assertEqual(listening_item['href'], '/listening-teacher')
+        self.assertIsNone(listening_item['module_id'])
+        self.assertFalse(listening_item['fallback_used'])
+
+    def test_study_plan_routes_pronunciation_focus_to_pronunciation_teacher(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Pronunciation'],
+            level_code='A2',
+            score=35,
+            status='Needs Review',
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Grammar'],
+            level_code='A2',
+            score=42,
+            status='Needs Review',
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Speaking'],
+            level_code='A2',
+            score=75,
+            status='Learning',
+        )
+
+        response = self.client.post('/api/scheduler/generate-plan/', {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = self.assert_success_response(response)
+        pronunciation_item = next(
+            item for item in data['plan']['items']
+            if item['skill'] == 'Pronunciation'
+        )
+        self.assertEqual(pronunciation_item['title'], 'Pronunciation Teacher Session')
+        self.assertEqual(pronunciation_item['href'], '/pronunciation-teacher')
+        self.assertIsNone(pronunciation_item['module_id'])
+        self.assertFalse(pronunciation_item['fallback_used'])
+
+    def test_study_plan_routes_speaking_focus_to_speaking_teacher(self):
+        self.authenticate()
+        LearnerProfile.objects.create(user=self.user, current_level='A2')
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Speaking'],
+            level_code='A2',
+            score=31,
+            status='Needs Review',
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Grammar'],
+            level_code='A2',
+            score=45,
+            status='Needs Review',
+        )
+        SkillMastery.objects.create(
+            user=self.user,
+            skill=self.skills['Listening'],
+            level_code='A2',
+            score=78,
+            status='Learning',
+        )
+
+        response = self.client.post('/api/scheduler/generate-plan/', {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = self.assert_success_response(response)
+        speaking_item = next(
+            item for item in data['plan']['items']
+            if item['skill'] == 'Speaking'
+        )
+        self.assertEqual(speaking_item['title'], 'Speaking Teacher Session')
+        self.assertEqual(speaking_item['href'], '/speaking-teacher')
+        self.assertIsNone(speaking_item['module_id'])
+        self.assertFalse(speaking_item['fallback_used'])
+
     def test_scheduler_and_coach_return_saved_progress(self):
         self.authenticate()
         SkillMastery.objects.create(
@@ -1449,7 +2919,7 @@ class AgentMVPAPITests(APITestCase):
             plan_data['plan']['days'],
             [
                 f'Day 1: Grammar - {self.grammar_module.title}',
-                f'Day 2: Speaking - {self.speaking_module.title}',
+                'Day 2: Speaking Teacher Session',
             ],
         )
         self.assertEqual(len(plan_data['plan']['items']), 2)
@@ -1551,6 +3021,20 @@ class AgentMVPAPITests(APITestCase):
         profile.refresh_from_db()
         self.assertEqual(updated_level, 'A1')
         self.assertEqual(profile.current_level, 'A1')
+
+    def test_pronunciation_recommendation_does_not_change_cefr_progression_blocker_rules(self):
+        profile = LearnerProfile.objects.create(user=self.user, current_level='A1')
+        SkillMastery.objects.create(user=self.user, skill=self.skills['Grammar'], level_code='A1', score=88)
+        SkillMastery.objects.create(user=self.user, skill=self.skills['Vocabulary'], level_code='A1', score=82)
+        SkillMastery.objects.create(user=self.user, skill=self.skills['Listening'], level_code='A1', score=90)
+        SkillMastery.objects.create(user=self.user, skill=self.skills['Speaking'], level_code='A1', score=87)
+        SkillMastery.objects.create(user=self.user, skill=self.skills['Pronunciation'], level_code='A1', score=35)
+
+        updated_level = recalculate_learner_level(self.user)
+
+        profile.refresh_from_db()
+        self.assertEqual(updated_level, 'A2')
+        self.assertEqual(profile.current_level, 'A2')
 
     def test_recalculate_learner_level_does_not_promote_beyond_c2(self):
         profile = LearnerProfile.objects.create(user=self.user, current_level='C2')

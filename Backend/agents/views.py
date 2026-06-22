@@ -10,6 +10,8 @@ from xiavlearn.api import success_response
 
 from .services import (
     answer_guided_teacher_session,
+    answer_listening_teacher_session,
+    answer_pronunciation_teacher_session,
     answer_speaking_teacher_session,
     create_teacher_session,
     evaluate_diagnostic,
@@ -17,7 +19,11 @@ from .services import (
     get_guided_teacher_session_state,
     get_coach_summary,
     get_curriculum_recommendation,
+    get_listening_teacher_session_state,
+    get_pronunciation_teacher_session_state,
     get_speaking_teacher_session_state,
+    start_listening_teacher_session,
+    start_pronunciation_teacher_session,
     start_speaking_teacher_session,
     start_guided_teacher_session,
     submit_teacher_feedback,
@@ -293,6 +299,194 @@ class SpeakingTeacherSessionAnswerView(APIView):
         return success_response(
             result,
             'Speaking teacher answer evaluated.',
+        )
+
+
+class ListeningTeacherSessionStartView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        session_data = start_listening_teacher_session(request.user)
+        return success_response(
+            session_data,
+            'Listening teacher session started.',
+            status.HTTP_201_CREATED,
+        )
+
+
+class ListeningTeacherSessionDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, session_id):
+        lesson_session = get_object_or_404(
+            LessonSession.objects.select_related('study_session__user').prefetch_related('turns'),
+            pk=session_id,
+            study_session__user=request.user,
+            session_mode=LessonSession.SESSION_MODE_LISTENING,
+        )
+        session_data = get_listening_teacher_session_state(
+            request.user,
+            lesson_session,
+        )
+        return success_response(
+            session_data,
+            'Listening teacher session loaded.',
+        )
+
+
+class ListeningTeacherSessionAnswerView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request, session_id):
+        answer = request.data.get('answer')
+        audio_file = request.FILES.get('audio_file')
+        if (
+            not isinstance(answer, str) or not answer.strip()
+        ) and audio_file is None:
+            return Response(
+                {
+                    'success': False,
+                    'error': 'Provide a non-empty answer or audio_file.',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        lesson_session = get_object_or_404(
+            LessonSession.objects.select_related('study_session__user'),
+            pk=session_id,
+            study_session__user=request.user,
+            session_mode=LessonSession.SESSION_MODE_LISTENING,
+        )
+        try:
+            result = answer_listening_teacher_session(
+                request.user,
+                lesson_session,
+                answer=answer if isinstance(answer, str) else None,
+                audio_file=audio_file,
+            )
+        except ValueError as exc:
+            return Response(
+                {
+                    'success': False,
+                    'error': str(exc),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except VoiceDiagnosticConfigError as exc:
+            return Response(
+                {
+                    'success': False,
+                    'error': str(exc),
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except VoiceDiagnosticError as exc:
+            return Response(
+                {
+                    'success': False,
+                    'error': str(exc),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return success_response(
+            result,
+            'Listening teacher answer evaluated.',
+        )
+
+
+class PronunciationTeacherSessionStartView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        session_data = start_pronunciation_teacher_session(request.user)
+        return success_response(
+            session_data,
+            'Pronunciation teacher session started.',
+            status.HTTP_201_CREATED,
+        )
+
+
+class PronunciationTeacherSessionDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, session_id):
+        lesson_session = get_object_or_404(
+            LessonSession.objects.select_related('study_session__user').prefetch_related('turns'),
+            pk=session_id,
+            study_session__user=request.user,
+            session_mode=LessonSession.SESSION_MODE_PRONUNCIATION,
+        )
+        session_data = get_pronunciation_teacher_session_state(
+            request.user,
+            lesson_session,
+        )
+        return success_response(
+            session_data,
+            'Pronunciation teacher session loaded.',
+        )
+
+
+class PronunciationTeacherSessionAnswerView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request, session_id):
+        transcript = request.data.get('transcript')
+        audio_file = request.FILES.get('audio_file')
+        if (
+            not isinstance(transcript, str) or not transcript.strip()
+        ) and audio_file is None:
+            return Response(
+                {
+                    'success': False,
+                    'error': 'Provide a non-empty transcript or audio_file.',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        lesson_session = get_object_or_404(
+            LessonSession.objects.select_related('study_session__user'),
+            pk=session_id,
+            study_session__user=request.user,
+            session_mode=LessonSession.SESSION_MODE_PRONUNCIATION,
+        )
+        try:
+            result = answer_pronunciation_teacher_session(
+                request.user,
+                lesson_session,
+                transcript=transcript if isinstance(transcript, str) else None,
+                audio_file=audio_file,
+            )
+        except ValueError as exc:
+            return Response(
+                {
+                    'success': False,
+                    'error': str(exc),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except VoiceDiagnosticConfigError as exc:
+            return Response(
+                {
+                    'success': False,
+                    'error': str(exc),
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except VoiceDiagnosticError as exc:
+            return Response(
+                {
+                    'success': False,
+                    'error': str(exc),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return success_response(
+            result,
+            'Pronunciation teacher answer evaluated.',
         )
 
 

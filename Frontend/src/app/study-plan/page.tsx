@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import Button from "@/components/Button";
 import Card from "@/components/Card";
@@ -32,21 +32,64 @@ export default function StudyPlanPage() {
     }
   }
 
+  useEffect(() => {
+    const refreshRequested =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("refresh") === "1";
+    if (refreshRequested && !plan && !loading) {
+      const timer = window.setTimeout(() => {
+        void buildPlan();
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [loading, plan]);
+
+  function itemSummary(item: StudyPlanData["plan"]["items"][number]) {
+    if (item.skill === "Listening") {
+      return "Open your listening teacher session for passage-based comprehension practice.";
+    }
+    if (item.skill === "Pronunciation") {
+      return "Open your pronunciation teacher session for official-level speaking-sound practice.";
+    }
+    if (item.skill === "Speaking") {
+      return "Open your speaking teacher session for guided spoken-answer practice with AI feedback.";
+    }
+    if (item.module_id) {
+      return "Open this guided lesson and continue your weekly focus.";
+    }
+    return "Open your recommendation to choose the next lesson.";
+  }
+
+  function itemActionLabel(item: StudyPlanData["plan"]["items"][number]) {
+    if (item.skill === "Listening") {
+      return "Start Listening Session";
+    }
+    if (item.skill === "Pronunciation") {
+      return "Start Pronunciation Session";
+    }
+    if (item.skill === "Speaking") {
+      return "Start Speaking Session";
+    }
+    if (item.module_id) {
+      return "Open lesson";
+    }
+    return "View recommendation";
+  }
+
   return (
     <main className="page-shell">
       <p className="eyebrow">Step 5</p>
       <h1 className="page-title">Study plan and coach summary</h1>
       <p className="page-copy">
-        Build a focused weekly plan from your latest mastery scores and lesson
-        activity.
+        Build a focused weekly plan from your latest official mastery scores.
       </p>
 
       {!plan ? (
         <Card className="mt-8 max-w-2xl">
           <h2 className="text-xl font-bold">Ready for your next week?</h2>
           <p className="mt-3 text-[#60708a]">
-            XiAv Learn will prioritize the skills that currently need the most
-            practice.
+            XiAv Learn will prioritize the official skills that currently need
+            the most support.
           </p>
           {error ? <div className="error-box">{error}</div> : null}
           <Button className="mt-5" disabled={loading} onClick={buildPlan}>
@@ -100,9 +143,10 @@ export default function StudyPlanPage() {
                       </p>
                     ) : null}
                     <p className="mt-2 text-sm leading-6 text-[#60708a]">
-                      {item.module_id
-                        ? "Open this guided lesson and continue your weekly focus."
-                        : "Open your recommendation to choose the next lesson."}
+                      {itemSummary(item)}
+                    </p>
+                    <p className="mt-4 text-sm font-bold text-[#335cff]">
+                      {itemActionLabel(item)}
                     </p>
                   </Link>
                 </li>

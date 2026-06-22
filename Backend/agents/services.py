@@ -105,6 +105,24 @@ SPEAKING_TEACHER_SKILL = 'Speaking'
 SPEAKING_TEACHER_SESSION_TYPE = 'speaking_teacher_session'
 SPEAKING_PRACTICE_SCORE_LABEL = 'Practice Score'
 SPEAKING_FILLER_WORDS = {'um', 'uh', 'like', 'actually', 'basically'}
+PRONUNCIATION_TEACHER_SKILL = 'Pronunciation'
+PRONUNCIATION_TEACHER_SESSION_TYPE = 'pronunciation_teacher_session'
+PRONUNCIATION_PRACTICE_SCORE_LABEL = 'Practice Score'
+LISTENING_TEACHER_SKILL = 'Listening'
+LISTENING_TEACHER_SESSION_TYPE = 'listening_teacher_session'
+LISTENING_PRACTICE_SCORE_LABEL = 'Practice Score'
+VOICE_TEACHER_SESSION_ROUTES = {
+    PRONUNCIATION_TEACHER_SKILL: '/pronunciation-teacher',
+    LISTENING_TEACHER_SKILL: '/listening-teacher',
+    SPEAKING_TEACHER_SKILL: '/speaking-teacher',
+}
+OFFICIAL_RECOMMENDATION_SKILLS = (
+    'Grammar',
+    'Vocabulary',
+    LISTENING_TEACHER_SKILL,
+    SPEAKING_TEACHER_SKILL,
+    PRONUNCIATION_TEACHER_SKILL,
+)
 SPEAKING_TEACHER_TASKS = {
     'A1': [
         {
@@ -224,6 +242,286 @@ SPEAKING_TEACHER_TASKS = {
             'teacher_prompt': 'Give an abstract or persuasive response that balances multiple perspectives.',
             'target_focus': 'multiple perspectives with a strong final position',
             'keywords': ['perspective', 'balance', 'abstract', 'position', 'however', 'therefore'],
+        },
+    ],
+}
+PRONUNCIATION_TEACHER_TASKS = {
+    'A1': [
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'My name is Anna.',
+            'target_focus': 'basic sentence clarity',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'I live in Cebu.',
+            'target_focus': 'clear basic words',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'I practice English every day.',
+            'target_focus': 'sentence rhythm and word clarity',
+        },
+    ],
+    'A2': [
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'I worked on the project yesterday.',
+            'target_focus': 'past tense ending clarity',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'Please send me the report today.',
+            'target_focus': 'basic workplace phrase rhythm',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'I talked to the customer this morning.',
+            'target_focus': 'final consonant sounds in connected speech',
+        },
+    ],
+    'B1': [
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'I solved the problem because I checked the network settings.',
+            'target_focus': 'linking words and longer sentence clarity',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'Although the task was difficult, I finished it on time.',
+            'target_focus': 'contrast words and sentence rhythm',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'I want to improve my English so I can communicate more clearly.',
+            'target_focus': 'workplace explanation flow',
+        },
+    ],
+    'B2': [
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'The main advantage of this solution is that it reduces support time.',
+            'target_focus': 'complex sentence stress',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'Although both options are useful, I recommend the faster workflow.',
+            'target_focus': 'professional comparison rhythm',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'We should review the process before making a final decision.',
+            'target_focus': 'professional explanation clarity',
+        },
+    ],
+    'C1': [
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'From my perspective, the most effective solution requires both accuracy and speed.',
+            'target_focus': 'professional fluency and sentence stress',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'The challenge is not only technical but also related to communication.',
+            'target_focus': 'complex phrase rhythm',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'I would recommend a structured approach that balances quality and efficiency.',
+            'target_focus': 'natural rhythm in complex recommendations',
+        },
+    ],
+    'C2': [
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'A thoughtful decision requires careful analysis, practical judgment, and clear communication.',
+            'target_focus': 'advanced rhythm and clarity',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'The proposal is compelling, but its long-term implications require further evaluation.',
+            'target_focus': 'nuanced professional phrasing',
+        },
+        {
+            'task_type': 'repeat_sentence',
+            'teacher_prompt': 'Repeat this sentence clearly.',
+            'target_text': 'Effective leadership depends on clarity, empathy, and strategic execution.',
+            'target_focus': 'persuasive professional speech rhythm',
+        },
+    ],
+}
+LISTENING_TEACHER_TASKS = {
+    'A1': [
+        {
+            'task_type': 'detail_question',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'My name is Anna. I live in Cebu. I study English every morning.',
+            'question_text': 'What is her name?',
+            'expected_answer': 'Anna.',
+            'target_focus': 'identify a simple personal detail',
+        },
+        {
+            'task_type': 'detail_question',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'My name is Anna. I live in Cebu. I study English every morning.',
+            'question_text': 'Where does she live?',
+            'expected_answer': 'She lives in Cebu.',
+            'target_focus': 'identify a location detail',
+        },
+        {
+            'task_type': 'detail_question',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'My name is Anna. I live in Cebu. I study English every morning.',
+            'question_text': 'When does she study English?',
+            'expected_answer': 'Every morning.',
+            'target_focus': 'identify a time detail',
+        },
+    ],
+    'A2': [
+        {
+            'task_type': 'detail_question',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'Yesterday, Mark worked on a report. He sent it to his manager before lunch.',
+            'question_text': 'What did Mark work on yesterday?',
+            'expected_answer': 'A report.',
+            'target_focus': 'identify the main work detail',
+        },
+        {
+            'task_type': 'detail_question',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'Yesterday, Mark worked on a report. He sent it to his manager before lunch.',
+            'question_text': 'Who did he send the report to?',
+            'expected_answer': 'His manager.',
+            'target_focus': 'identify the receiver of an action',
+        },
+        {
+            'task_type': 'sequence',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'Yesterday, Mark worked on a report. He sent it to his manager before lunch.',
+            'question_text': 'When did he send it?',
+            'expected_answer': 'Before lunch.',
+            'target_focus': 'identify a time sequence detail',
+        },
+    ],
+    'B1': [
+        {
+            'task_type': 'detail_question',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'The customer could not connect to the internet, so I checked the network settings. After restarting the router, the connection worked again.',
+            'question_text': 'What problem did the customer have?',
+            'expected_answer': 'The customer could not connect to the internet.',
+            'target_focus': 'identify the main problem',
+        },
+        {
+            'task_type': 'detail_question',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'The customer could not connect to the internet, so I checked the network settings. After restarting the router, the connection worked again.',
+            'question_text': 'What did the speaker check?',
+            'expected_answer': 'The network settings.',
+            'target_focus': 'identify the action detail',
+        },
+        {
+            'task_type': 'main_idea',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'The customer could not connect to the internet, so I checked the network settings. After restarting the router, the connection worked again.',
+            'question_text': 'What solved the problem?',
+            'expected_answer': 'Restarting the router.',
+            'target_focus': 'identify the solution result',
+        },
+    ],
+    'B2': [
+        {
+            'task_type': 'comparison',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'The faster workflow saves time, but it requires more careful review. The slower workflow takes longer, but it reduces mistakes during support handoffs.',
+            'question_text': 'What is the advantage of the faster workflow?',
+            'expected_answer': 'It saves time.',
+            'target_focus': 'identify a comparison advantage',
+        },
+        {
+            'task_type': 'comparison',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'The faster workflow saves time, but it requires more careful review. The slower workflow takes longer, but it reduces mistakes during support handoffs.',
+            'question_text': 'What is the advantage of the slower workflow?',
+            'expected_answer': 'It reduces mistakes.',
+            'target_focus': 'identify a comparison detail',
+        },
+        {
+            'task_type': 'inference',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'The faster workflow saves time, but it requires more careful review. The slower workflow takes longer, but it reduces mistakes during support handoffs.',
+            'question_text': 'What tradeoff is described?',
+            'expected_answer': 'Speed versus careful review or accuracy.',
+            'target_focus': 'identify the tradeoff in the passage',
+        },
+    ],
+    'C1': [
+        {
+            'task_type': 'main_idea',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'The team should improve response time, but speed should not reduce accuracy. A structured workflow can help agents solve issues faster while keeping quality consistent.',
+            'question_text': 'What should the team improve?',
+            'expected_answer': 'Response time.',
+            'target_focus': 'identify the main recommendation target',
+        },
+        {
+            'task_type': 'inference',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'The team should improve response time, but speed should not reduce accuracy. A structured workflow can help agents solve issues faster while keeping quality consistent.',
+            'question_text': 'What risk should they avoid?',
+            'expected_answer': 'Reducing accuracy.',
+            'target_focus': 'identify the caution in the passage',
+        },
+        {
+            'task_type': 'main_idea',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'The team should improve response time, but speed should not reduce accuracy. A structured workflow can help agents solve issues faster while keeping quality consistent.',
+            'question_text': 'What solution is recommended?',
+            'expected_answer': 'A structured workflow.',
+            'target_focus': 'identify the recommended solution',
+        },
+    ],
+    'C2': [
+        {
+            'task_type': 'main_idea',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'Effective support is not only about solving issues quickly. It also requires judgment, empathy, and the ability to explain complex solutions in a way users can understand.',
+            'question_text': 'What is support not only about?',
+            'expected_answer': 'Solving issues quickly.',
+            'target_focus': 'identify the contrasted main idea',
+        },
+        {
+            'task_type': 'detail_question',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'Effective support is not only about solving issues quickly. It also requires judgment, empathy, and the ability to explain complex solutions in a way users can understand.',
+            'question_text': 'What qualities does effective support require?',
+            'expected_answer': 'Judgment, empathy, and clear explanation.',
+            'target_focus': 'identify multiple required qualities',
+        },
+        {
+            'task_type': 'vocabulary_context',
+            'teacher_prompt': 'Listen to the passage and answer the question.',
+            'passage_text': 'Effective support is not only about solving issues quickly. It also requires judgment, empathy, and the ability to explain complex solutions in a way users can understand.',
+            'question_text': 'What must agents explain clearly?',
+            'expected_answer': 'Complex solutions.',
+            'target_focus': 'identify the final key object',
         },
     ],
 }
@@ -1365,9 +1663,9 @@ def _normalized_cefr_level(level_code, default='A1'):
     return default
 
 
-def _official_speaking_mastery_snapshot(user):
+def _official_skill_mastery_snapshot(user, skill_name):
     mastery = (
-        SkillMastery.objects.filter(user=user, skill__name=SPEAKING_TEACHER_SKILL)
+        SkillMastery.objects.filter(user=user, skill__name=skill_name)
         .select_related('skill')
         .first()
     )
@@ -1391,6 +1689,18 @@ def _official_speaking_mastery_snapshot(user):
             default=fallback_level,
         ),
     }
+
+
+def _official_speaking_mastery_snapshot(user):
+    return _official_skill_mastery_snapshot(user, SPEAKING_TEACHER_SKILL)
+
+
+def _official_pronunciation_mastery_snapshot(user):
+    return _official_skill_mastery_snapshot(user, PRONUNCIATION_TEACHER_SKILL)
+
+
+def _official_listening_mastery_snapshot(user):
+    return _official_skill_mastery_snapshot(user, LISTENING_TEACHER_SKILL)
 
 
 def _speaking_tasks_for_level(level_code):
@@ -1420,6 +1730,695 @@ def _build_speaking_session_context(user):
         'skill': SPEAKING_TEACHER_SKILL,
         'tasks': _speaking_tasks_for_level(level_code),
         'total_turns': GUIDED_SESSION_TOTAL_TURNS,
+    }
+
+
+def _pronunciation_tasks_for_level(level_code):
+    normalized_level = _normalized_cefr_level(level_code, default='A1')
+    tasks = PRONUNCIATION_TEACHER_TASKS.get(
+        normalized_level,
+        PRONUNCIATION_TEACHER_TASKS['A1'],
+    )
+    return [
+        {
+            **task,
+            'turn_number': index + 1,
+        }
+        for index, task in enumerate(tasks)
+    ]
+
+
+def _pronunciation_session_intro(level_code):
+    return (
+        f'This Pronunciation Teacher Session uses three {level_code} repetition '
+        'tasks for practice only. It does not change your official mastery.'
+    )
+
+
+def _build_pronunciation_session_context(user):
+    snapshot = _official_pronunciation_mastery_snapshot(user)
+    level_code = snapshot['official_mastery_level']
+    return {
+        **snapshot,
+        'skill': PRONUNCIATION_TEACHER_SKILL,
+        'tasks': _pronunciation_tasks_for_level(level_code),
+        'total_turns': GUIDED_SESSION_TOTAL_TURNS,
+    }
+
+
+def _listening_tasks_for_level(level_code):
+    normalized_level = _normalized_cefr_level(level_code, default='A1')
+    tasks = LISTENING_TEACHER_TASKS.get(
+        normalized_level,
+        LISTENING_TEACHER_TASKS['A1'],
+    )
+    return [
+        {
+            **task,
+            'turn_number': index + 1,
+            'audio_url': None,
+        }
+        for index, task in enumerate(tasks)
+    ]
+
+
+def _listening_session_intro(level_code):
+    return (
+        f'This Listening Teacher Session uses three {level_code} listening tasks '
+        'for practice only. It does not change your official mastery.'
+    )
+
+
+def _build_listening_session_context(user):
+    snapshot = _official_listening_mastery_snapshot(user)
+    level_code = snapshot['official_mastery_level']
+    return {
+        **snapshot,
+        'skill': LISTENING_TEACHER_SKILL,
+        'tasks': _listening_tasks_for_level(level_code),
+        'total_turns': GUIDED_SESSION_TOTAL_TURNS,
+    }
+
+
+def _pronunciation_session_tasks(lesson_session):
+    return (lesson_session.session_context or {}).get('tasks', [])
+
+
+def _current_pronunciation_task(lesson_session):
+    tasks = _pronunciation_session_tasks(lesson_session)
+    turn_index = max(lesson_session.current_turn - 1, 0)
+    if turn_index >= len(tasks):
+        return None
+    return tasks[turn_index]
+
+
+def _listening_session_tasks(lesson_session):
+    return (lesson_session.session_context or {}).get('tasks', [])
+
+
+def _current_listening_task(lesson_session):
+    tasks = _listening_session_tasks(lesson_session)
+    turn_index = max(lesson_session.current_turn - 1, 0)
+    if turn_index >= len(tasks):
+        return None
+    return tasks[turn_index]
+
+
+def _normalize_pronunciation_text(text):
+    return re.sub(r'\s+', ' ', (text or '').strip())
+
+
+def _pronunciation_words(text):
+    return re.findall(r"[a-z0-9']+", _normalize_pronunciation_text(text).lower())
+
+
+def _compare_pronunciation_target(target_text, transcript):
+    from .voice_services import compare_pronunciation
+
+    comparison = compare_pronunciation(target_text, transcript)
+    target_words = _pronunciation_words(target_text)
+    extra_words = len(comparison['extra_words'])
+    missing_words = len(comparison['missing_words'])
+    substituted_words = len(comparison['substituted_words'])
+    target_length = max(len(target_words), 1)
+
+    completion = _clamp(((target_length - missing_words) / target_length) * 100)
+    missing_penalty_score = _clamp(100 - ((missing_words / target_length) * 100))
+    substitution_penalty_score = _clamp(
+        100 - ((substituted_words / target_length) * 100)
+    )
+    extra_penalty_score = _clamp(100 - ((extra_words / target_length) * 100))
+    clarity_estimate = _clamp(
+        comparison['word_accuracy']
+        - substituted_words * 6
+        - extra_words * 3
+        + (5 if not comparison['missing_words'] and not comparison['substituted_words'] else 0)
+    )
+    score = _clamp(
+        comparison['word_accuracy'] * 0.45
+        + missing_penalty_score * 0.20
+        + substitution_penalty_score * 0.15
+        + extra_penalty_score * 0.05
+        + completion * 0.10
+        + clarity_estimate * 0.05
+    )
+    return {
+        **comparison,
+        'completion': completion,
+        'clarity_estimate': clarity_estimate,
+        'score': score,
+    }
+
+
+def _normalize_listening_text(text):
+    return _normalized_compare_text(text)
+
+
+def _listening_words(text):
+    return re.findall(r"[a-z0-9']+", _normalize_listening_text(text))
+
+
+def _extract_expected_keywords(expected_answer):
+    words = _listening_words(expected_answer)
+    keywords = [
+        word
+        for word in words
+        if len(word) > 2 and word not in COMMON_WORDS
+    ]
+    if keywords:
+        return keywords
+    return words or ['answer']
+
+
+def _compare_listening_answer(expected_answer, student_answer):
+    normalized_expected = _normalize_listening_text(expected_answer)
+    normalized_answer = _normalize_listening_text(student_answer)
+    expected_keywords = _extract_expected_keywords(expected_answer)
+    answer_words = set(_listening_words(student_answer))
+    matched_keywords = [
+        keyword
+        for keyword in expected_keywords
+        if keyword in answer_words
+    ]
+    missing_keywords = [
+        keyword
+        for keyword in expected_keywords
+        if keyword not in answer_words
+    ]
+    keyword_recall = (
+        len(matched_keywords) / len(expected_keywords)
+        if expected_keywords
+        else 0
+    )
+    similarity = difflib.SequenceMatcher(
+        None,
+        normalized_expected,
+        normalized_answer,
+    ).ratio()
+    word_count = len(_listening_words(student_answer))
+
+    if not normalized_answer:
+        answer_match = 'empty'
+        score = 0
+    else:
+        correct_detail = keyword_recall * 100
+        relevance = max(keyword_recall * 100, similarity * 100)
+        completeness = keyword_recall * 100
+        clarity = 30
+        if word_count >= 2:
+            clarity += 20
+        if word_count >= 5:
+            clarity += 15
+        if student_answer.strip()[-1:] in '.!?':
+            clarity += 5
+        semantic = similarity * 100
+        score = _clamp(
+            correct_detail * 0.35
+            + relevance * 0.25
+            + completeness * 0.20
+            + clarity * 0.10
+            + semantic * 0.10
+        )
+
+        if keyword_recall >= 1 and similarity >= 0.82:
+            answer_match = 'complete'
+            score = max(score, 95)
+        elif keyword_recall >= 1:
+            answer_match = 'complete'
+            score = max(score, 90)
+        elif keyword_recall >= 0.6 or similarity >= 0.62:
+            answer_match = 'mostly_correct'
+            score = max(score, 76)
+            score = min(score, 88)
+        elif keyword_recall > 0 or similarity >= 0.38:
+            answer_match = 'partial'
+            score = max(score, 52)
+            score = min(score, 70)
+        else:
+            answer_match = 'unrelated'
+            score = min(score, 40)
+            score = max(score, 25)
+
+    return {
+        'answer_match': answer_match,
+        'score': score,
+        'matched_keywords': matched_keywords,
+        'missing_keywords': missing_keywords,
+        'keyword_recall': _clamp(keyword_recall * 100),
+        'semantic_similarity': _clamp(similarity * 100),
+    }
+
+
+def _build_listening_turn_feedback(task, answer, comparison):
+    score = comparison['score']
+    answer_match = comparison['answer_match']
+    missing_keywords = comparison['missing_keywords']
+
+    if answer_match == 'complete':
+        feedback = 'Correct. You understood the key detail from the listening passage.'
+    elif answer_match == 'mostly_correct':
+        feedback = 'Mostly correct. You understood the main idea, but one small detail can be clearer.'
+    elif answer_match == 'partial':
+        feedback = 'Partly correct. You caught part of the answer, but an important detail is missing.'
+    elif answer_match == 'unrelated':
+        feedback = 'This answer does not match the listening question closely enough.'
+    else:
+        feedback = 'No clear answer was provided yet.'
+
+    if answer_match in {'complete', 'mostly_correct'}:
+        explanation = f'The passage supports this answer: {task["expected_answer"]}'
+    elif missing_keywords:
+        explanation = (
+            'Listen again for the missing detail, especially: '
+            f'{", ".join(missing_keywords[:3])}.'
+        )
+    else:
+        explanation = (
+            f'Focus on {task["target_focus"]}. The correct answer is: '
+            f'{task["expected_answer"]}'
+        )
+
+    return {
+        'feedback': feedback,
+        'correction': task['expected_answer'],
+        'explanation': explanation,
+        'encouragement': _encouragement_for_score(score),
+    }
+
+
+def _evaluate_listening_teacher_answer(task, answer):
+    normalized_answer = _normalize_text(answer) or ''
+    comparison = _compare_listening_answer(task['expected_answer'], normalized_answer)
+    feedback = _build_listening_turn_feedback(task, normalized_answer, comparison)
+    evaluation_breakdown = {
+        'passage_text': task['passage_text'],
+        'question_text': task['question_text'],
+        'expected_answer': task['expected_answer'],
+        'answer_match': comparison['answer_match'],
+        'matched_keywords': comparison['matched_keywords'],
+        'missing_keywords': comparison['missing_keywords'],
+        'keyword_recall': comparison['keyword_recall'],
+        'semantic_similarity': comparison['semantic_similarity'],
+        'score': comparison['score'],
+    }
+    return {
+        'score': comparison['score'],
+        'answer_match': comparison['answer_match'],
+        'matched_keywords': comparison['matched_keywords'],
+        'missing_keywords': comparison['missing_keywords'],
+        'evaluation_breakdown': evaluation_breakdown,
+        **feedback,
+    }
+
+
+def _serialize_listening_current_task(task):
+    if task is None:
+        return None
+    return {
+        'turn_number': task['turn_number'],
+        'task_type': task['task_type'],
+        'teacher_prompt': task['teacher_prompt'],
+        'passage_text': task['passage_text'],
+        'audio_url': task.get('audio_url'),
+        'question_text': task['question_text'],
+        'target_focus': task['target_focus'],
+    }
+
+
+def _serialize_listening_next_task(task):
+    if task is None:
+        return None
+    return {
+        'turn_number': task['turn_number'],
+        'teacher_task': task['teacher_prompt'],
+        'passage_text': task['passage_text'],
+        'audio_url': task.get('audio_url'),
+        'question_text': task['question_text'],
+        'target_focus': task['target_focus'],
+    }
+
+
+def _serialize_listening_teacher_turn(turn):
+    breakdown = turn.evaluation_breakdown or {}
+    return {
+        'turn_number': turn.turn_number,
+        'task_type': turn.task_type,
+        'teacher_task': turn.teacher_task,
+        'passage_text': breakdown.get('passage_text', ''),
+        'question_text': breakdown.get('question_text', ''),
+        'expected_answer': breakdown.get('expected_answer', turn.target_text),
+        'student_answer': turn.student_answer,
+        'score': int(turn.score) if turn.score is not None else None,
+        'feedback': turn.ai_feedback,
+        'correction': turn.correction,
+        'explanation': turn.explanation,
+        'encouragement': turn.encouragement,
+        'answer_match': breakdown.get('answer_match', 'empty'),
+        'matched_keywords': breakdown.get('matched_keywords', []),
+        'missing_keywords': breakdown.get('missing_keywords', []),
+        'evaluation_breakdown': {
+            key: value
+            for key, value in breakdown.items()
+            if key not in {
+                'passage_text',
+                'question_text',
+                'expected_answer',
+                'answer_match',
+                'matched_keywords',
+                'missing_keywords',
+            }
+        },
+    }
+
+
+def _build_listening_final_result(lesson_session):
+    turns = list(lesson_session.turns.all())
+    scores = [int(turn.score) for turn in turns if turn.score is not None]
+    practice_score = _clamp(sum(scores) / len(scores)) if scores else 0
+
+    answer_matches = []
+    missing_keyword_counts = []
+    for turn in turns:
+        breakdown = turn.evaluation_breakdown or {}
+        answer_matches.append(breakdown.get('answer_match', 'empty'))
+        missing_keyword_counts.append(len(breakdown.get('missing_keywords', [])))
+
+    complete_count = sum(1 for match in answer_matches if match == 'complete')
+    strong_turn_count = sum(1 for match in answer_matches if match in {'complete', 'mostly_correct'})
+    average_missing = (
+        sum(missing_keyword_counts) / len(missing_keyword_counts)
+        if missing_keyword_counts
+        else 0
+    )
+
+    strengths = []
+    if strong_turn_count >= 2:
+        strengths.append('You identified the important details from the listening passages.')
+    if complete_count >= 1:
+        strengths.append('You gave at least one complete listening answer with the right detail.')
+    if not strengths:
+        strengths.append('You completed all three listening practice turns.')
+
+    improvement_areas = []
+    if average_missing >= 1.5:
+        improvement_areas.append('Practice listening for exact detail words before answering.')
+    if practice_score < 80:
+        improvement_areas.append('Practice answering with complete sentences and listening for reasons or results.')
+    if not improvement_areas:
+        improvement_areas.append('Keep practicing longer passages so your listening stays accurate under more detail.')
+
+    official_level = (lesson_session.session_context or {}).get('official_mastery_level', 'A1')
+    return {
+        'practice_score': practice_score,
+        'label': LISTENING_PRACTICE_SCORE_LABEL,
+        'strengths': strengths,
+        'improvement_areas': improvement_areas,
+        'next_suggestion': (
+            f'Practice one more {official_level} listening session, then retake '
+            'the Listening Diagnostic when ready.'
+        ),
+        'feedback_summary': (
+            f'You completed a three-turn listening practice session with a '
+            f'{LISTENING_PRACTICE_SCORE_LABEL.lower()} of {practice_score}%.'
+        ),
+    }
+
+
+def _serialize_listening_teacher_session(lesson_session):
+    context = lesson_session.session_context or {}
+    turns = [
+        _serialize_listening_teacher_turn(turn)
+        for turn in lesson_session.turns.all()
+    ]
+    final_result = None
+    if lesson_session.status == 'completed':
+        summary = lesson_session.feedback_summary or {}
+        final_result = {
+            'practice_score': (
+                summary.get('practice_score')
+                if summary.get('practice_score') is not None
+                else int(lesson_session.final_score) if lesson_session.final_score is not None else None
+            ),
+            'label': summary.get('label', LISTENING_PRACTICE_SCORE_LABEL),
+            'strengths': summary.get('strengths', []),
+            'improvement_areas': summary.get('improvement_areas', []),
+            'next_suggestion': summary.get('next_suggestion', ''),
+            'feedback_summary': summary.get('feedback_summary', ''),
+        }
+
+    return {
+        'session_id': lesson_session.id,
+        'study_session_id': lesson_session.study_session_id,
+        'session_mode': lesson_session.session_mode,
+        'skill': context.get('skill', LISTENING_TEACHER_SKILL),
+        'official_mastery_assessed': context.get('official_mastery_assessed', False),
+        'official_mastery_score': context.get('official_mastery_score', 0),
+        'official_mastery_level': context.get('official_mastery_level', 'A1'),
+        'status': lesson_session.status,
+        'current_turn': lesson_session.current_turn,
+        'total_turns': context.get('total_turns', GUIDED_SESSION_TOTAL_TURNS),
+        'lesson': lesson_session.lesson_text,
+        'turns': turns,
+        'current_task': (
+            _serialize_listening_current_task(_current_listening_task(lesson_session))
+            if lesson_session.status != 'completed'
+            else None
+        ),
+        'final_result': final_result,
+    }
+
+
+def _build_pronunciation_turn_feedback(task, transcript, comparison):
+    score = comparison['score']
+    target_focus = task.get('target_focus', 'steady pacing and clear word endings')
+    missing_words = comparison['missing_words']
+    substituted_words = comparison['substituted_words']
+    extra_words = comparison['extra_words']
+
+    correction = _normalize_pronunciation_text(transcript)
+    if not correction:
+        correction = task['target_text']
+    elif correction[-1] not in '.!?':
+        correction += '.'
+
+    if score >= 90:
+        feedback = 'Strong repetition. Your pronunciation matched the target sentence closely.'
+    elif score >= 75:
+        feedback = 'Good repetition. Most of the target sentence was clear, with a few small misses.'
+    elif score >= 55:
+        feedback = 'Understandable attempt. Slow down and match the target sentence more exactly.'
+    else:
+        feedback = 'This attempt was hard to match to the target sentence. Repeat it slowly and clearly.'
+
+    if missing_words:
+        explanation = (
+            'Some target words were missing. Repeat the full sentence and keep every key word, '
+            f'especially: {", ".join(missing_words[:3])}.'
+        )
+    elif substituted_words:
+        sample = substituted_words[0]
+        explanation = (
+            'A few words changed during the repetition. Focus on saying '
+            f'"{sample["expected"]}" instead of "{sample["heard"]}".'
+        )
+    elif extra_words:
+        explanation = (
+            'You added extra words. Stay closer to the exact sentence and keep a steady rhythm.'
+        )
+    else:
+        explanation = f'Keep practicing {target_focus} to make the sentence sound even smoother.'
+
+    return {
+        'feedback': feedback,
+        'correction': task['target_text'],
+        'explanation': explanation,
+        'encouragement': _encouragement_for_score(score),
+    }
+
+
+def _evaluate_pronunciation_teacher_answer(task, transcript):
+    normalized_transcript = _normalize_pronunciation_text(transcript)
+    if not normalized_transcript:
+        comparison = {
+            'score': 0,
+            'word_accuracy': 0,
+            'feedback': 'No clear repetition was detected.',
+            'missing_words': _pronunciation_words(task['target_text']),
+            'extra_words': [],
+            'substituted_words': [],
+            'completion': 0,
+            'clarity_estimate': 0,
+        }
+    else:
+        comparison = _compare_pronunciation_target(task['target_text'], normalized_transcript)
+
+    feedback = _build_pronunciation_turn_feedback(task, normalized_transcript, comparison)
+    evaluation_breakdown = {
+        'word_accuracy': comparison['word_accuracy'],
+        'completion': comparison['completion'],
+        'clarity_estimate': comparison['clarity_estimate'],
+        'missing_words_count': len(comparison['missing_words']),
+        'extra_words_count': len(comparison['extra_words']),
+        'substituted_words_count': len(comparison['substituted_words']),
+        'score': comparison['score'],
+    }
+    return {
+        'score': comparison['score'],
+        'word_accuracy': comparison['word_accuracy'],
+        'missing_words': comparison['missing_words'],
+        'extra_words': comparison['extra_words'],
+        'substituted_words': comparison['substituted_words'],
+        'evaluation_breakdown': evaluation_breakdown,
+        **feedback,
+    }
+
+
+def _serialize_pronunciation_current_task(task):
+    if task is None:
+        return None
+    return {
+        'turn_number': task['turn_number'],
+        'task_type': task['task_type'],
+        'teacher_prompt': task['teacher_prompt'],
+        'target_text': task['target_text'],
+        'target_focus': task['target_focus'],
+    }
+
+
+def _serialize_pronunciation_next_task(task):
+    if task is None:
+        return None
+    return {
+        'turn_number': task['turn_number'],
+        'teacher_task': task['teacher_prompt'],
+        'target_text': task['target_text'],
+        'target_focus': task['target_focus'],
+    }
+
+
+def _serialize_pronunciation_teacher_turn(turn):
+    breakdown = turn.evaluation_breakdown or {}
+    return {
+        'turn_number': turn.turn_number,
+        'task_type': turn.task_type,
+        'teacher_task': turn.teacher_task,
+        'target_text': turn.target_text,
+        'target_focus': turn.target_focus,
+        'transcript': turn.student_answer,
+        'score': int(turn.score) if turn.score is not None else None,
+        'feedback': turn.ai_feedback,
+        'correction': turn.correction,
+        'explanation': turn.explanation,
+        'encouragement': turn.encouragement,
+        'word_accuracy': breakdown.get('word_accuracy', 0),
+        'missing_words': breakdown.get('missing_words', []),
+        'extra_words': breakdown.get('extra_words', []),
+        'substituted_words': breakdown.get('substituted_words', []),
+        'evaluation_breakdown': {
+            key: value
+            for key, value in breakdown.items()
+            if key not in {'missing_words', 'extra_words', 'substituted_words'}
+        },
+    }
+
+
+def _build_pronunciation_final_result(lesson_session):
+    turns = list(lesson_session.turns.all())
+    scores = [int(turn.score) for turn in turns if turn.score is not None]
+    practice_score = _clamp(sum(scores) / len(scores)) if scores else 0
+
+    all_missing_words = []
+    all_extra_words = []
+    substitution_count = 0
+    word_accuracy_scores = []
+    for turn in turns:
+        breakdown = turn.evaluation_breakdown or {}
+        word_accuracy = breakdown.get('word_accuracy')
+        if isinstance(word_accuracy, (int, float)):
+            word_accuracy_scores.append(int(word_accuracy))
+        all_missing_words.extend(breakdown.get('missing_words', []))
+        all_extra_words.extend(breakdown.get('extra_words', []))
+        substitution_count += len(breakdown.get('substituted_words', []))
+
+    avg_word_accuracy = _clamp(sum(word_accuracy_scores) / len(word_accuracy_scores)) if word_accuracy_scores else 0
+    strengths = []
+    if avg_word_accuracy >= 85:
+        strengths.append('You repeated the target sentences with strong word accuracy.')
+    if substitution_count <= 1:
+        strengths.append('You kept most of the word sounds close to the target sentence.')
+    if not strengths:
+        strengths.append('You completed all three pronunciation practice turns.')
+
+    improvement_areas = []
+    if all_missing_words:
+        improvement_areas.append(
+            f'Repeat every target word fully, especially words like {", ".join(all_missing_words[:3])}.'
+        )
+    if substitution_count > 1:
+        improvement_areas.append('Slow down and match each target word more exactly before speeding up.')
+    if all_extra_words and len(improvement_areas) < 2:
+        improvement_areas.append('Avoid adding extra words so your repetition stays exact.')
+    if not improvement_areas:
+        improvement_areas.append('Keep practicing clear pacing and final consonant sounds for even smoother repetition.')
+
+    official_level = (lesson_session.session_context or {}).get('official_mastery_level', 'A1')
+    return {
+        'practice_score': practice_score,
+        'label': PRONUNCIATION_PRACTICE_SCORE_LABEL,
+        'strengths': strengths,
+        'improvement_areas': improvement_areas,
+        'next_suggestion': (
+            f'Practice one more {official_level} pronunciation session, then retake '
+            'the Pronunciation Diagnostic when ready.'
+        ),
+        'feedback_summary': (
+            f'You completed a three-turn pronunciation practice session with a '
+            f'{PRONUNCIATION_PRACTICE_SCORE_LABEL.lower()} of {practice_score}%.'
+        ),
+    }
+
+
+def _serialize_pronunciation_teacher_session(lesson_session):
+    context = lesson_session.session_context or {}
+    turns = [
+        _serialize_pronunciation_teacher_turn(turn)
+        for turn in lesson_session.turns.all()
+    ]
+    final_result = None
+    if lesson_session.status == 'completed':
+        summary = lesson_session.feedback_summary or {}
+        final_result = {
+            'practice_score': (
+                summary.get('practice_score')
+                if summary.get('practice_score') is not None
+                else int(lesson_session.final_score) if lesson_session.final_score is not None else None
+            ),
+            'label': summary.get('label', PRONUNCIATION_PRACTICE_SCORE_LABEL),
+            'strengths': summary.get('strengths', []),
+            'improvement_areas': summary.get('improvement_areas', []),
+            'next_suggestion': summary.get('next_suggestion', ''),
+            'feedback_summary': summary.get('feedback_summary', ''),
+        }
+
+    return {
+        'session_id': lesson_session.id,
+        'study_session_id': lesson_session.study_session_id,
+        'session_mode': lesson_session.session_mode,
+        'skill': context.get('skill', PRONUNCIATION_TEACHER_SKILL),
+        'official_mastery_assessed': context.get('official_mastery_assessed', False),
+        'official_mastery_score': context.get('official_mastery_score', 0),
+        'official_mastery_level': context.get('official_mastery_level', 'A1'),
+        'status': lesson_session.status,
+        'current_turn': lesson_session.current_turn,
+        'total_turns': context.get('total_turns', GUIDED_SESSION_TOTAL_TURNS),
+        'lesson': lesson_session.lesson_text,
+        'turns': turns,
+        'current_task': (
+            _serialize_pronunciation_current_task(_current_pronunciation_task(lesson_session))
+            if lesson_session.status != 'completed'
+            else None
+        ),
+        'final_result': final_result,
     }
 
 
@@ -2012,46 +3011,55 @@ def get_curriculum_recommendation(user):
         .order_by('score', 'skill__name')
     )
     learner_level = _learner_level_for_user(user)
-
     weakest = masteries[0] if masteries else None
+    current_skill_scores = _official_skill_score_snapshot(masteries)
+    module_selection = _module_selection_result(None, learner_level)
     recommended_mastery = weakest
-    module_selection = None
-    for mastery in masteries:
-        module_selection = _select_module_for_skill(
-            mastery.skill.name,
-            learner_level,
-        )
-        if module_selection['module'] is not None:
-            recommended_mastery = mastery
-            break
+    recommended_action = None
 
-    if module_selection is None or module_selection['module'] is None:
+    if weakest:
+        weakest_voice_action = _teacher_session_action_for_skill(weakest.skill.name)
+        if weakest_voice_action is not None:
+            recommended_action = weakest_voice_action
+        else:
+            for mastery in masteries:
+                module_selection = _select_module_for_skill(
+                    mastery.skill.name,
+                    learner_level,
+                )
+                if module_selection['module'] is not None:
+                    recommended_mastery = mastery
+                    break
+            if module_selection['module'] is None:
+                module_selection = _select_default_module_for_level(learner_level)
+            recommended_action = _lesson_action_for_module(
+                recommended_mastery.skill.name if recommended_mastery else None,
+                module_selection['module'],
+            )
+    else:
         module_selection = _select_default_module_for_level(learner_level)
+        recommended_action = _lesson_action_for_module(
+            None,
+            module_selection['module'],
+        )
 
     module = module_selection['module']
+    recommended_focus = (
+        recommended_mastery.skill.name
+        if recommended_mastery else weakest.skill.name if weakest else None
+    )
     if recommended_mastery and module:
         if recommended_mastery == weakest:
-            reason = f'{weakest.skill.name} is your weakest skill.'
+            reason = f'{weakest.skill.name} is your lowest current official skill.'
         else:
             reason = (
-                f'{recommended_mastery.skill.name} is your weakest skill '
-                f'with an active {learner_level} module.'
+                f'{recommended_mastery.skill.name} is your lowest current official skill '
+                f'with an active {learner_level} lesson path.'
             )
     elif weakest:
-        reason = f'{weakest.skill.name} is your weakest skill.'
+        reason = f'{weakest.skill.name} is your lowest current official skill.'
     else:
         reason = 'Start with a module at your current level.'
-
-    score_lookup = {
-        mastery.skill.name: int(mastery.score)
-        for mastery in masteries
-    }
-    current_skill_scores = {
-        'Vocabulary': score_lookup.get('Vocabulary'),
-        'Grammar': score_lookup.get('Grammar'),
-        'Listening': score_lookup.get('Listening'),
-        'Speaking': score_lookup.get('Speaking'),
-    }
 
     return {
         'recommended_module': _serialize_module(module),
@@ -2059,6 +3067,9 @@ def get_curriculum_recommendation(user):
         'diagnostic_scores': current_skill_scores,
         'current_skill_scores': current_skill_scores,
         'weakest_skill': weakest.skill.name if weakest else None,
+        'recommended_focus': recommended_focus,
+        'recommended_focus_reason': reason,
+        'recommended_action': recommended_action,
         'learner_level': module_selection['learner_level'],
         'module_level': module_selection['module_level'],
         'fallback_used': module_selection['fallback_used'],
@@ -2075,6 +3086,40 @@ def _join_with_and(values):
     if len(items) == 2:
         return f'{items[0]} and {items[1]}'
     return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+def _official_skill_score_snapshot(masteries):
+    score_lookup = {
+        mastery.skill.name: int(mastery.score)
+        for mastery in masteries
+    }
+    return {
+        skill_name: score_lookup.get(skill_name)
+        for skill_name in OFFICIAL_RECOMMENDATION_SKILLS
+    }
+
+
+def _teacher_session_action_for_skill(skill_name):
+    href = VOICE_TEACHER_SESSION_ROUTES.get(skill_name)
+    if not href:
+        return None
+    return {
+        'type': 'teacher_session',
+        'skill': skill_name,
+        'label': f'Start {skill_name} Teacher Session',
+        'href': href,
+    }
+
+
+def _lesson_action_for_module(skill_name, module):
+    if module is None:
+        return None
+    return {
+        'type': 'module',
+        'skill': skill_name,
+        'label': 'Start Lesson',
+        'href': f'/feedback?moduleId={module.id}',
+    }
 
 
 def _study_plan_focus_skills(user):
@@ -2113,6 +3158,24 @@ def _build_study_plan_items(user, focus):
     preferred_level = _learner_level_for_user(user)
     items = []
     for index, skill_name in enumerate(focus, start=1):
+        voice_teacher_href = VOICE_TEACHER_SESSION_ROUTES.get(skill_name)
+        if voice_teacher_href:
+            items.append(
+                {
+                    'day': f'Day {index}',
+                    'title': f'{skill_name} Teacher Session',
+                    'skill': skill_name,
+                    'level': preferred_level,
+                    'learner_level': preferred_level,
+                    'module_level': None,
+                    'module_id': None,
+                    'module_title': None,
+                    'fallback_used': False,
+                    'fallback_reason': None,
+                    'href': voice_teacher_href,
+                }
+            )
+            continue
         selection = _study_plan_module_for_skill(user, skill_name, preferred_level)
         module = selection['module']
         module_title = module.title if module else None
@@ -2741,6 +3804,128 @@ def get_guided_teacher_session_state(user, lesson_session):
 
 
 @transaction.atomic
+def start_listening_teacher_session(user):
+    session_context = _build_listening_session_context(user)
+    lesson_session = LessonSession.objects.create(
+        study_session=StudySession.objects.create(
+            user=user,
+            session_type=LISTENING_TEACHER_SESSION_TYPE,
+        ),
+        lesson_text=_listening_session_intro(session_context['official_mastery_level']),
+        session_mode=LessonSession.SESSION_MODE_LISTENING,
+        session_context=session_context,
+        status='active',
+        current_turn=1,
+    )
+    return _serialize_listening_teacher_session(lesson_session)
+
+
+def get_listening_teacher_session_state(user, lesson_session):
+    if lesson_session.study_session.user_id != user.id:
+        raise LessonSession.DoesNotExist
+    if lesson_session.session_mode != LessonSession.SESSION_MODE_LISTENING:
+        raise LessonSession.DoesNotExist
+    return _serialize_listening_teacher_session(lesson_session)
+
+
+@transaction.atomic
+def answer_listening_teacher_session(
+    user,
+    lesson_session,
+    answer=None,
+    audio_file=None,
+):
+    if lesson_session.study_session.user_id != user.id:
+        raise LessonSession.DoesNotExist
+    if lesson_session.session_mode != LessonSession.SESSION_MODE_LISTENING:
+        raise LessonSession.DoesNotExist
+    if lesson_session.status == 'completed':
+        raise ValueError('This listening teacher session is already complete.')
+
+    answer_text = _normalize_text(answer)
+    if answer_text is None:
+        if audio_file is None:
+            raise ValueError('Provide an answer or audio_file.')
+        from .voice_services import transcribe_audio
+
+        answer_text = transcribe_audio(audio_file)
+
+    task = _current_listening_task(lesson_session)
+    if task is None:
+        raise ValueError('This listening teacher session has no remaining task.')
+
+    evaluation = _evaluate_listening_teacher_answer(task, answer_text)
+    turn_number = lesson_session.current_turn
+    turn = LessonTurn.objects.create(
+        session=lesson_session,
+        turn_number=turn_number,
+        task_type=task['task_type'],
+        target_text=task['expected_answer'],
+        target_focus=task['target_focus'],
+        teacher_task=task['teacher_prompt'],
+        student_answer=answer_text,
+        ai_feedback=evaluation['feedback'],
+        correction=evaluation['correction'],
+        explanation=evaluation['explanation'],
+        encouragement=evaluation['encouragement'],
+        score=Decimal(evaluation['score']),
+        evaluation_breakdown=evaluation['evaluation_breakdown'],
+    )
+
+    lesson_session.study_session.input_text = '\n'.join(
+        lesson_session.turns.exclude(student_answer='').values_list('student_answer', flat=True)
+    )
+
+    response = {
+        'session_id': lesson_session.id,
+        'turn': _serialize_listening_teacher_turn(turn),
+        'completed': False,
+        'next_task': None,
+        'final_result': None,
+    }
+
+    total_turns = (lesson_session.session_context or {}).get(
+        'total_turns',
+        GUIDED_SESSION_TOTAL_TURNS,
+    )
+    if turn_number >= total_turns:
+        lesson_session.status = 'completed'
+        lesson_session.completed_at = timezone.now()
+        final_result = _build_listening_final_result(lesson_session)
+        lesson_session.final_score = Decimal(final_result['practice_score'])
+        lesson_session.feedback_summary = final_result
+        lesson_session.study_session.ai_feedback = final_result['feedback_summary']
+        lesson_session.study_session.score = Decimal(final_result['practice_score'])
+        lesson_session.study_session.completed_at = lesson_session.completed_at
+        response['completed'] = True
+        response['final_result'] = final_result
+    else:
+        lesson_session.current_turn = turn_number + 1
+        response['next_task'] = _serialize_listening_next_task(
+            _current_listening_task(lesson_session)
+        )
+
+    lesson_session.study_session.save(
+        update_fields=[
+            'input_text',
+            'ai_feedback',
+            'score',
+            'completed_at',
+        ]
+    )
+    lesson_session.save(
+        update_fields=[
+            'status',
+            'current_turn',
+            'final_score',
+            'feedback_summary',
+            'completed_at',
+        ]
+    )
+    return response
+
+
+@transaction.atomic
 def start_speaking_teacher_session(user):
     session_context = _build_speaking_session_context(user)
     lesson_session = LessonSession.objects.create(
@@ -2763,6 +3948,134 @@ def get_speaking_teacher_session_state(user, lesson_session):
     if lesson_session.session_mode != LessonSession.SESSION_MODE_SPEAKING:
         raise LessonSession.DoesNotExist
     return _serialize_speaking_teacher_session(lesson_session)
+
+
+@transaction.atomic
+def start_pronunciation_teacher_session(user):
+    session_context = _build_pronunciation_session_context(user)
+    lesson_session = LessonSession.objects.create(
+        study_session=StudySession.objects.create(
+            user=user,
+            session_type=PRONUNCIATION_TEACHER_SESSION_TYPE,
+        ),
+        lesson_text=_pronunciation_session_intro(session_context['official_mastery_level']),
+        session_mode=LessonSession.SESSION_MODE_PRONUNCIATION,
+        session_context=session_context,
+        status='active',
+        current_turn=1,
+    )
+    return _serialize_pronunciation_teacher_session(lesson_session)
+
+
+def get_pronunciation_teacher_session_state(user, lesson_session):
+    if lesson_session.study_session.user_id != user.id:
+        raise LessonSession.DoesNotExist
+    if lesson_session.session_mode != LessonSession.SESSION_MODE_PRONUNCIATION:
+        raise LessonSession.DoesNotExist
+    return _serialize_pronunciation_teacher_session(lesson_session)
+
+
+@transaction.atomic
+def answer_pronunciation_teacher_session(
+    user,
+    lesson_session,
+    transcript=None,
+    audio_file=None,
+):
+    if lesson_session.study_session.user_id != user.id:
+        raise LessonSession.DoesNotExist
+    if lesson_session.session_mode != LessonSession.SESSION_MODE_PRONUNCIATION:
+        raise LessonSession.DoesNotExist
+    if lesson_session.status == 'completed':
+        raise ValueError('This pronunciation teacher session is already complete.')
+
+    transcript_text = _normalize_pronunciation_text(transcript)
+    if not transcript_text:
+        if audio_file is None:
+            raise ValueError('Provide a transcript or audio_file.')
+        from .voice_services import transcribe_audio
+
+        transcript_text = _normalize_pronunciation_text(transcribe_audio(audio_file))
+
+    task = _current_pronunciation_task(lesson_session)
+    if task is None:
+        raise ValueError('This pronunciation teacher session has no remaining task.')
+
+    evaluation = _evaluate_pronunciation_teacher_answer(task, transcript_text)
+    evaluation_breakdown = {
+        **evaluation['evaluation_breakdown'],
+        'missing_words': evaluation['missing_words'],
+        'extra_words': evaluation['extra_words'],
+        'substituted_words': evaluation['substituted_words'],
+    }
+    turn_number = lesson_session.current_turn
+    turn = LessonTurn.objects.create(
+        session=lesson_session,
+        turn_number=turn_number,
+        task_type=task['task_type'],
+        target_text=task['target_text'],
+        target_focus=task['target_focus'],
+        teacher_task=task['teacher_prompt'],
+        student_answer=transcript_text,
+        ai_feedback=evaluation['feedback'],
+        correction=evaluation['correction'],
+        explanation=evaluation['explanation'],
+        encouragement=evaluation['encouragement'],
+        score=Decimal(evaluation['score']),
+        evaluation_breakdown=evaluation_breakdown,
+    )
+
+    lesson_session.study_session.input_text = '\n'.join(
+        lesson_session.turns.exclude(student_answer='').values_list('student_answer', flat=True)
+    )
+
+    response = {
+        'session_id': lesson_session.id,
+        'turn': _serialize_pronunciation_teacher_turn(turn),
+        'completed': False,
+        'next_task': None,
+        'final_result': None,
+    }
+
+    total_turns = (lesson_session.session_context or {}).get(
+        'total_turns',
+        GUIDED_SESSION_TOTAL_TURNS,
+    )
+    if turn_number >= total_turns:
+        lesson_session.status = 'completed'
+        lesson_session.completed_at = timezone.now()
+        final_result = _build_pronunciation_final_result(lesson_session)
+        lesson_session.final_score = Decimal(final_result['practice_score'])
+        lesson_session.feedback_summary = final_result
+        lesson_session.study_session.ai_feedback = final_result['feedback_summary']
+        lesson_session.study_session.score = Decimal(final_result['practice_score'])
+        lesson_session.study_session.completed_at = lesson_session.completed_at
+        response['completed'] = True
+        response['final_result'] = final_result
+    else:
+        lesson_session.current_turn = turn_number + 1
+        response['next_task'] = _serialize_pronunciation_next_task(
+            _current_pronunciation_task(lesson_session)
+        )
+
+    lesson_session.study_session.save(
+        update_fields=[
+            'input_text',
+            'ai_feedback',
+            'score',
+            'completed_at',
+        ]
+    )
+    lesson_session.save(
+        update_fields=[
+            'status',
+            'current_turn',
+            'final_score',
+            'feedback_summary',
+            'completed_at',
+        ]
+    )
+    return response
 
 
 @transaction.atomic
