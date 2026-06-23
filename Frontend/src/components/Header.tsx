@@ -43,6 +43,7 @@ const dropdownGroups: NavGroup[] = [
       { label: "Speaking Teacher", href: "/speaking-teacher" },
       { label: "Listening Teacher", href: "/listening-teacher" },
       { label: "Pronunciation Teacher", href: "/pronunciation-teacher" },
+      { label: "Voice Conversation", href: "/voice-conversation" },
     ],
   },
 ];

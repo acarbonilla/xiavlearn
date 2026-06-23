@@ -160,3 +160,114 @@ class VoiceDiagnosticItem(models.Model):
 
     def __str__(self):
         return f'{self.session_id} {self.skill} item {self.item_number}'
+
+
+class VoiceConversationSession(models.Model):
+    TARGET_SKILL_SPEAKING = 'speaking'
+    TARGET_SKILL_LISTENING = 'listening'
+    TARGET_SKILL_PRONUNCIATION = 'pronunciation'
+    TARGET_SKILL_GENERAL = 'general'
+    TARGET_SKILL_CHOICES = (
+        (TARGET_SKILL_SPEAKING, 'Speaking'),
+        (TARGET_SKILL_LISTENING, 'Listening'),
+        (TARGET_SKILL_PRONUNCIATION, 'Pronunciation'),
+        (TARGET_SKILL_GENERAL, 'General'),
+    )
+
+    STATUS_ACTIVE = 'active'
+    STATUS_COMPLETED = 'completed'
+    STATUS_ABANDONED = 'abandoned'
+    STATUS_CHOICES = (
+        (STATUS_ACTIVE, 'Active'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_ABANDONED, 'Abandoned'),
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='voice_conversation_sessions',
+    )
+    title = models.CharField(max_length=255, blank=True, default='')
+    target_skill = models.CharField(
+        max_length=50,
+        choices=TARGET_SKILL_CHOICES,
+        default=TARGET_SKILL_SPEAKING,
+    )
+    cefr_level = models.CharField(max_length=10, blank=True, default='')
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_ACTIVE,
+    )
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    summary = models.TextField(blank=True, default='')
+    final_feedback = models.TextField(blank=True, default='')
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-started_at', '-id']
+
+    def __str__(self):
+        return (
+            'VoiceConversationSession('
+            f'user={self.user.username}, '
+            f'target_skill={self.target_skill}, '
+            f'status={self.status}'
+            ')'
+        )
+
+
+class VoiceConversationTurn(models.Model):
+    TRANSCRIPT_SOURCE_MANUAL = 'manual'
+    TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram'
+    TRANSCRIPT_SOURCE_FALLBACK = 'fallback'
+    TRANSCRIPT_SOURCE_CHOICES = (
+        (TRANSCRIPT_SOURCE_MANUAL, 'Manual'),
+        (TRANSCRIPT_SOURCE_DEEPGRAM, 'Deepgram'),
+        (TRANSCRIPT_SOURCE_FALLBACK, 'Fallback'),
+    )
+
+    session = models.ForeignKey(
+        VoiceConversationSession,
+        on_delete=models.CASCADE,
+        related_name='turns',
+    )
+    turn_number = models.PositiveIntegerField()
+    user_transcript = models.TextField(blank=True, default='')
+    ai_response_text = models.TextField(blank=True, default='')
+    user_audio = models.FileField(
+        upload_to='voice-conversation/user-audio/',
+        null=True,
+        blank=True,
+    )
+    ai_audio = models.FileField(
+        upload_to='voice-conversation/ai-audio/',
+        null=True,
+        blank=True,
+    )
+    transcript_source = models.CharField(
+        max_length=50,
+        choices=TRANSCRIPT_SOURCE_CHOICES,
+        default=TRANSCRIPT_SOURCE_MANUAL,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['session_id', 'turn_number', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['session', 'turn_number'],
+                name='unique_voice_conversation_turn_number',
+            )
+        ]
+
+    def __str__(self):
+        return (
+            'VoiceConversationTurn('
+            f'session_id={self.session_id}, '
+            f'turn_number={self.turn_number}'
+            ')'
+        )

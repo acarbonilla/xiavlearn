@@ -111,3 +111,22 @@ def coach_summary_prompt(profile_level, weakest_skill, recent_session_count):
         f'Completed recent sessions: {recent_session_count}'
     )
     return system_prompt, user_prompt
+
+
+def voice_conversation_response_prompt(session, user_transcript):
+    system_prompt = (
+        'You are an English conversation teacher for a practice-only voice '
+        'conversation product. Return only valid JSON with key response_text. '
+        'response_text must be a short teacher-style reply in plain English. '
+        'It must explicitly say this is practice feedback only, give one '
+        'helpful coaching note, and end with one follow-up question. Do not '
+        'mention scores, CEFR advancement, official mastery, diagnostics, or '
+        'unlocking anything. Keep the reply under 90 words.'
+    )
+    user_prompt = (
+        f'Target skill: {session.target_skill}\n'
+        f'CEFR level: {session.cefr_level or "Unknown"}\n'
+        f'Conversation title: {session.title or "Untitled"}\n'
+        f'Learner transcript: {user_transcript.strip()}'
+    )
+    return system_prompt, user_prompt

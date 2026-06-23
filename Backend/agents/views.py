@@ -1,13 +1,21 @@
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from agents.models import LessonSession
+from agents.models import LessonSession, VoiceConversationSession
 from learning.models import Module, StudySession
 from xiavlearn.api import success_response
 
+from .serializers import (
+    VoiceConversationSessionDetailSerializer,
+    VoiceConversationSessionSerializer,
+    VoiceConversationSessionStartSerializer,
+    VoiceConversationTurnSerializer,
+    VoiceConversationTurnCreateSerializer,
+)
 from .services import (
     answer_guided_teacher_session,
     answer_listening_teacher_session,
@@ -28,7 +36,25 @@ from .services import (
     start_guided_teacher_session,
     submit_teacher_feedback,
 )
+from .voice_conversation_services import create_voice_conversation_turn
 from .voice_services import VoiceDiagnosticConfigError, VoiceDiagnosticError
+
+
+def _error_response(message, status_code=status.HTTP_400_BAD_REQUEST):
+    return Response(
+        {
+            'success': False,
+            'error': message,
+        },
+        status=status_code,
+    )
+
+
+def _get_voice_conversation_session_queryset(include_turns=False):
+    queryset = VoiceConversationSession.objects.select_related('user')
+    if include_turns:
+        queryset = queryset.prefetch_related('turns')
+    return queryset
 
 
 class DiagnosticEvaluateView(APIView):
@@ -542,4 +568,113 @@ class CoachSummaryView(APIView):
         return success_response(
             get_coach_summary(request.user),
             'Coach summary generated.',
+        )
+
+
+class VoiceConversationSessionStartView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = VoiceConversationSessionStartSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        session = VoiceConversationSession.objects.create(
+            user=request.user,
+            **serializer.validated_data,
+        )
+        response_serializer = VoiceConversationSessionSerializer(session)
+        return success_response(
+            response_serializer.data,
+            'Voice conversation session started.',
+            status.HTTP_201_CREATED,
+        )
+
+
+class VoiceConversationSessionListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        sessions = _get_voice_conversation_session_queryset().filter(user=request.user)
+        serializer = VoiceConversationSessionSerializer(sessions, many=True)
+        return success_response(
+            serializer.data,
+            'Voice conversation sessions loaded.',
+        )
+
+
+class VoiceConversationSessionDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, session_id):
+        session = get_object_or_404(
+            _get_voice_conversation_session_queryset(include_turns=True),
+            pk=session_id,
+            user=request.user,
+        )
+        serializer = VoiceConversationSessionDetailSerializer(session)
+        return success_response(
+            serializer.data,
+            'Voice conversation session loaded.',
+        )
+
+
+class VoiceConversationTurnCreateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request, session_id):
+        session = get_object_or_404(
+            _get_voice_conversation_session_queryset(),
+            pk=session_id,
+            user=request.user,
+        )
+        if session.status != VoiceConversationSession.STATUS_ACTIVE:
+            return _error_response(
+                'Only active voice conversation sessions can accept new turns.'
+            )
+
+        serializer = VoiceConversationTurnCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            turn = create_voice_conversation_turn(
+                session=session,
+                user_transcript=serializer.validated_data.get('user_transcript'),
+                user=request.user,
+                user_audio=serializer.validated_data.get('user_audio'),
+                transcript_source=serializer.validated_data.get(
+                    'transcript_source',
+                    'fallback',
+                ),
+                metadata=serializer.validated_data.get('metadata', {}),
+            )
+        except ValueError as exc:
+            return _error_response(str(exc))
+        except VoiceDiagnosticConfigError as exc:
+            return _error_response(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        except VoiceDiagnosticError as exc:
+            return _error_response(str(exc))
+
+        response_serializer = VoiceConversationTurnSerializer(turn)
+        return success_response(
+            response_serializer.data,
+            'Voice conversation turn created.',
+            status.HTTP_201_CREATED,
+        )
+
+
+class VoiceConversationSessionEndView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, session_id):
+        session = get_object_or_404(
+            _get_voice_conversation_session_queryset(),
+            pk=session_id,
+            user=request.user,
+        )
+        session.status = VoiceConversationSession.STATUS_COMPLETED
+        session.ended_at = timezone.now()
+        session.save(update_fields=['status', 'ended_at'])
+        serializer = VoiceConversationSessionSerializer(session)
+        return success_response(
+            serializer.data,
+            'Voice conversation session ended.',
         )

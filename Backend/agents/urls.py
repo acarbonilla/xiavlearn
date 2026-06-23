@@ -19,6 +19,11 @@ from .views import (
     TeacherSessionStartView,
     TeacherFeedbackView,
     TeacherSessionView,
+    VoiceConversationSessionDetailView,
+    VoiceConversationSessionEndView,
+    VoiceConversationSessionListView,
+    VoiceConversationSessionStartView,
+    VoiceConversationTurnCreateView,
 )
 from .voice_views import (
     ListeningEvaluateBatchView,
@@ -186,5 +191,30 @@ urlpatterns = [
         'voice-diagnostic/speaking/evaluate-batch/',
         SpeakingEvaluateBatchView.as_view(),
         name='voice-diagnostic-speaking-evaluate-batch',
+    ),
+    path(
+        'voice-conversation/sessions/start/',
+        VoiceConversationSessionStartView.as_view(),
+        name='voice-conversation-session-start',
+    ),
+    path(
+        'voice-conversation/sessions/',
+        VoiceConversationSessionListView.as_view(),
+        name='voice-conversation-session-list',
+    ),
+    path(
+        'voice-conversation/sessions/<int:session_id>/',
+        VoiceConversationSessionDetailView.as_view(),
+        name='voice-conversation-session-detail',
+    ),
+    path(
+        'voice-conversation/sessions/<int:session_id>/turns/',
+        VoiceConversationTurnCreateView.as_view(),
+        name='voice-conversation-turn-create',
+    ),
+    path(
+        'voice-conversation/sessions/<int:session_id>/end/',
+        VoiceConversationSessionEndView.as_view(),
+        name='voice-conversation-session-end',
     ),
 ]

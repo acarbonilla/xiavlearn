@@ -1,6 +1,11 @@
 from rest_framework import serializers
 
-from .models import VoiceDiagnosticItem, VoiceDiagnosticSession
+from .models import (
+    VoiceConversationSession,
+    VoiceConversationTurn,
+    VoiceDiagnosticItem,
+    VoiceDiagnosticSession,
+)
 
 
 def _serialize_score(value):
@@ -73,3 +78,107 @@ class VoiceDiagnosticSessionDetailSerializer(VoiceDiagnosticSessionListSerialize
 
     class Meta(VoiceDiagnosticSessionListSerializer.Meta):
         fields = VoiceDiagnosticSessionListSerializer.Meta.fields + ['items']
+
+
+class VoiceConversationTurnSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VoiceConversationTurn
+        fields = [
+            'id',
+            'turn_number',
+            'user_transcript',
+            'ai_response_text',
+            'user_audio',
+            'ai_audio',
+            'transcript_source',
+            'created_at',
+            'metadata',
+        ]
+        read_only_fields = [
+            'id',
+            'turn_number',
+            'created_at',
+            'ai_response_text',
+            'user_audio',
+            'ai_audio',
+        ]
+
+
+class VoiceConversationSessionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VoiceConversationSession
+        fields = [
+            'id',
+            'title',
+            'target_skill',
+            'cefr_level',
+            'status',
+            'started_at',
+            'ended_at',
+            'summary',
+            'final_feedback',
+            'metadata',
+        ]
+        read_only_fields = [
+            'id',
+            'started_at',
+            'ended_at',
+            'status',
+            'summary',
+            'final_feedback',
+        ]
+
+
+class VoiceConversationSessionDetailSerializer(VoiceConversationSessionSerializer):
+    turns = VoiceConversationTurnSerializer(many=True, read_only=True)
+
+    class Meta(VoiceConversationSessionSerializer.Meta):
+        fields = VoiceConversationSessionSerializer.Meta.fields + ['turns']
+
+
+class VoiceConversationSessionStartSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = VoiceConversationSession
+        fields = [
+            'title',
+            'target_skill',
+            'cefr_level',
+            'metadata',
+        ]
+
+
+class VoiceConversationTurnCreateSerializer(serializers.Serializer):
+    user_transcript = serializers.CharField(
+        allow_blank=False,
+        trim_whitespace=True,
+        required=False,
+    )
+    user_audio = serializers.FileField(required=False, allow_empty_file=False, write_only=True)
+    audio_file = serializers.FileField(required=False, allow_empty_file=False, write_only=True)
+    transcript_source = serializers.ChoiceField(
+        choices=[
+            VoiceConversationTurn.TRANSCRIPT_SOURCE_MANUAL,
+            VoiceConversationTurn.TRANSCRIPT_SOURCE_FALLBACK,
+        ],
+        default=VoiceConversationTurn.TRANSCRIPT_SOURCE_FALLBACK,
+        required=False,
+    )
+    metadata = serializers.JSONField(required=False)
+
+    def validate(self, attrs):
+        user_transcript = attrs.get('user_transcript')
+        user_audio = attrs.get('user_audio') or attrs.get('audio_file')
+
+        if user_transcript and user_audio is not None:
+            raise serializers.ValidationError(
+                'Provide either user_transcript or audio_file, not both.'
+            )
+        if not user_transcript and user_audio is None:
+            raise serializers.ValidationError(
+                'Provide a non-empty user_transcript or audio_file.'
+            )
+
+        if user_audio is not None:
+            attrs['user_audio'] = user_audio
+            attrs['transcript_source'] = VoiceConversationTurn.TRANSCRIPT_SOURCE_DEEPGRAM
+        return attrs

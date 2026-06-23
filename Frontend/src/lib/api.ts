@@ -652,6 +652,41 @@ export type VoiceDiagnosticReport = {
   summary?: string;
 };
 
+export type VoiceConversationTargetSkill =
+  | "speaking"
+  | "listening"
+  | "pronunciation"
+  | "general";
+
+export type VoiceConversationTurn = {
+  id: number;
+  turn_number: number;
+  user_transcript: string;
+  ai_response_text: string;
+  user_audio: string | null;
+  ai_audio: string | null;
+  transcript_source: "manual" | "deepgram" | "fallback";
+  created_at: string;
+  metadata: Record<string, unknown>;
+};
+
+export type VoiceConversationSessionSummary = {
+  id: number;
+  title: string;
+  target_skill: VoiceConversationTargetSkill;
+  cefr_level: string;
+  status: "active" | "completed" | "abandoned";
+  started_at: string;
+  ended_at: string | null;
+  summary: string;
+  final_feedback: string;
+  metadata: Record<string, unknown>;
+};
+
+export type VoiceConversationSessionDetail = VoiceConversationSessionSummary & {
+  turns: VoiceConversationTurn[];
+};
+
 type ApiEnvelope<T> = {
   success: boolean;
   data: T;
@@ -682,6 +717,18 @@ function getErrorMessage(error: unknown): string {
     return Object.values(error).map(getErrorMessage).join(" ");
   }
   return "Request failed.";
+}
+
+export function resolveApiAssetUrl(path: string | null | undefined) {
+  if (!path) {
+    return null;
+  }
+
+  try {
+    return new URL(path, API_BASE_URL).toString();
+  } catch {
+    return path;
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1118,4 +1165,62 @@ export function submitSpeakingDiagnosticBatch({
     method: "POST",
     body: JSON.stringify({ session_id: sessionId, items }),
   });
+}
+
+export function startVoiceConversationSession(payload?: {
+  title?: string;
+  target_skill?: VoiceConversationTargetSkill;
+  cefr_level?: string;
+}) {
+  return request<VoiceConversationSessionSummary>(
+    "/api/voice-conversation/sessions/start/",
+    {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    },
+  );
+}
+
+export function getVoiceConversationSessions() {
+  return request<VoiceConversationSessionSummary[]>(
+    "/api/voice-conversation/sessions/",
+  );
+}
+
+export function getVoiceConversationSession(sessionId: number) {
+  return request<VoiceConversationSessionDetail>(
+    `/api/voice-conversation/sessions/${sessionId}/`,
+  );
+}
+
+export function createVoiceConversationTurn(
+  sessionId: number,
+  payload:
+    | {
+        user_transcript: string;
+        transcript_source?: "manual" | "fallback";
+      }
+    | FormData,
+) {
+  const body =
+    typeof FormData !== "undefined" && payload instanceof FormData
+      ? payload
+      : JSON.stringify(payload);
+  return request<VoiceConversationTurn>(
+    `/api/voice-conversation/sessions/${sessionId}/turns/`,
+    {
+      method: "POST",
+      body,
+    },
+  );
+}
+
+export function endVoiceConversationSession(sessionId: number) {
+  return request<VoiceConversationSessionSummary>(
+    `/api/voice-conversation/sessions/${sessionId}/end/`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 }
