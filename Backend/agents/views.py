@@ -1,3 +1,9 @@
+import mimetypes
+from pathlib import Path
+
+from django.conf import settings
+from django.db.models import Q
+from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import permissions, status
@@ -616,6 +622,18 @@ class VoiceConversationSessionDetailView(APIView):
             'Voice conversation session loaded.',
         )
 
+    def delete(self, request, session_id):
+        session = get_object_or_404(
+            _get_voice_conversation_session_queryset(include_turns=True),
+            pk=session_id,
+            user=request.user,
+        )
+        session.delete()
+        return success_response(
+            {},
+            'Voice conversation session deleted.',
+        )
+
 
 class VoiceConversationTurnCreateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -677,4 +695,38 @@ class VoiceConversationSessionEndView(APIView):
         return success_response(
             serializer.data,
             'Voice conversation session ended.',
+        )
+
+
+class VoiceConversationMediaView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, file_path):
+        normalized_path = file_path.strip().lstrip('/')
+        if not normalized_path.startswith('voice-conversation/'):
+            raise Http404
+
+        file_exists = VoiceConversationSession.objects.filter(
+            user=request.user,
+            turns__isnull=False,
+        ).filter(
+            Q(turns__user_audio=normalized_path) | Q(turns__ai_audio=normalized_path)
+        ).exists()
+        if not file_exists:
+            raise Http404
+
+        absolute_path = (Path(settings.MEDIA_ROOT) / normalized_path).resolve()
+        media_root = Path(settings.MEDIA_ROOT).resolve()
+        try:
+            absolute_path.relative_to(media_root)
+        except ValueError as exc:
+            raise Http404 from exc
+
+        if not absolute_path.is_file():
+            raise Http404
+
+        content_type, _ = mimetypes.guess_type(str(absolute_path))
+        return FileResponse(
+            absolute_path.open('rb'),
+            content_type=content_type or 'application/octet-stream',
         )

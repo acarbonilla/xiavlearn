@@ -665,7 +665,7 @@ export type VoiceConversationTurn = {
   ai_response_text: string;
   user_audio: string | null;
   ai_audio: string | null;
-  transcript_source: "manual" | "deepgram" | "fallback";
+  transcript_source: "manual" | "deepgram" | "deepgram_streaming" | "fallback";
   created_at: string;
   metadata: Record<string, unknown>;
 };
@@ -729,6 +729,15 @@ export function resolveApiAssetUrl(path: string | null | undefined) {
   } catch {
     return path;
   }
+}
+
+export function getVoiceConversationRealtimeUrl(sessionId: number) {
+  const url = new URL(API_BASE_URL);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = `/ws/voice-conversation/sessions/${sessionId}/`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1221,6 +1230,15 @@ export function endVoiceConversationSession(sessionId: number) {
     {
       method: "POST",
       body: JSON.stringify({}),
+    },
+  );
+}
+
+export function deleteVoiceConversationSession(sessionId: number) {
+  return request<Record<string, never>>(
+    `/api/voice-conversation/sessions/${sessionId}/`,
+    {
+      method: "DELETE",
     },
   );
 }

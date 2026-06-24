@@ -1,8 +1,9 @@
 import re
 
 from django.core.files.base import ContentFile
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Max
+from django.utils import timezone
 
 from .llm_client import call_llm_json
 from .models import VoiceConversationSession, VoiceConversationTurn
@@ -12,6 +13,7 @@ from .voice_services import transcribe_audio
 
 
 PRACTICE_ONLY_LABEL = 'Practice feedback only:'
+VOICE_CONVERSATION_TURN_CREATE_MAX_RETRIES = 3
 VOICE_CONVERSATION_SHORT_RESPONSE_THRESHOLD = 5
 VOICE_CONVERSATION_DETAILED_RESPONSE_THRESHOLD = 12
 TOPIC_FOLLOW_UPS = (
@@ -150,14 +152,44 @@ def _tts_file_name(turn, content_type):
     return f'session-{turn.session_id}-turn-{turn.turn_number}.{extension}'
 
 
-def _attach_ai_audio(turn):
-    audio_content, content_type = synthesize_tts(turn.ai_response_text)
+def _attach_ai_audio_content(turn, audio_content, content_type):
     turn.ai_audio.save(
         _tts_file_name(turn, content_type),
         ContentFile(audio_content),
         save=False,
     )
     return content_type
+
+
+def _attach_ai_audio(turn):
+    audio_content, content_type = synthesize_tts(turn.ai_response_text)
+    return _attach_ai_audio_content(turn, audio_content, content_type)
+
+
+def _next_voice_conversation_turn_number(session):
+    return (
+        session.turns.aggregate(max_turn_number=Max('turn_number'))['max_turn_number'] or 0
+    ) + 1
+
+
+def _create_turn_with_retry(*, session, create_kwargs):
+    last_error = None
+    for _ in range(VOICE_CONVERSATION_TURN_CREATE_MAX_RETRIES):
+        try:
+            with transaction.atomic():
+                VoiceConversationSession.objects.select_for_update().filter(
+                    pk=session.pk
+                ).exists()
+                return VoiceConversationTurn.objects.create(
+                    session=session,
+                    turn_number=_next_voice_conversation_turn_number(session),
+                    **create_kwargs,
+                )
+        except IntegrityError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise IntegrityError('Voice conversation turn creation failed.')
 
 
 @transaction.atomic
@@ -191,9 +223,6 @@ def create_voice_conversation_turn(
     else:
         normalized_transcript = _normalize_user_transcript(user_transcript)
 
-    next_turn_number = (
-        session.turns.aggregate(max_turn_number=Max('turn_number'))['max_turn_number'] or 0
-    ) + 1
     ai_response_text, response_source = generate_voice_conversation_response(
         session,
         normalized_transcript,
@@ -206,14 +235,15 @@ def create_voice_conversation_turn(
             'input_mode': input_mode,
         }
     )
-    turn = VoiceConversationTurn.objects.create(
+    turn = _create_turn_with_retry(
         session=session,
-        turn_number=next_turn_number,
-        user_transcript=normalized_transcript,
-        user_audio=user_audio,
-        transcript_source=transcript_source,
-        metadata=turn_metadata,
-        ai_response_text=ai_response_text,
+        create_kwargs={
+            'user_transcript': normalized_transcript,
+            'user_audio': user_audio,
+            'transcript_source': transcript_source,
+            'metadata': turn_metadata,
+            'ai_response_text': ai_response_text,
+        },
     )
     try:
         content_type = _attach_ai_audio(turn)
@@ -224,6 +254,79 @@ def create_voice_conversation_turn(
         turn_metadata['tts_generated'] = True
         turn_metadata['tts_provider'] = 'deepgram'
         turn_metadata['tts_content_type'] = content_type
+
+    turn.metadata = turn_metadata
+    update_fields = ['metadata']
+    if turn.ai_audio:
+        update_fields.append('ai_audio')
+    turn.save(update_fields=update_fields)
+    return turn
+
+
+@transaction.atomic
+def create_realtime_voice_conversation_turn(
+    *,
+    session,
+    user,
+    user_transcript,
+    ai_response_text,
+    response_id,
+    response_source,
+    stt_provider='deepgram',
+    ai_provider=None,
+    tts_provider=None,
+    ai_audio_content=None,
+    ai_audio_content_type=None,
+    interrupted=False,
+    fallback_used=False,
+    metadata=None,
+):
+    if session.user_id != user.id:
+        raise VoiceConversationSession.DoesNotExist
+    if session.status != VoiceConversationSession.STATUS_ACTIVE:
+        raise ValueError('Only active voice conversation sessions can accept new turns.')
+
+    normalized_transcript = _normalize_user_transcript(user_transcript)
+    normalized_ai_response = _normalize_ai_response_text(ai_response_text)
+    if not normalized_ai_response:
+        raise ValueError('ai_response_text must be a non-empty string.')
+
+    turn_metadata = dict(metadata or {})
+    turn_metadata.update(
+        {
+            'practice_only': True,
+            'mode': 'realtime',
+            'service_version': 'v5b-7',
+            'response_id': response_id,
+            'stt_provider': stt_provider,
+            'ai_provider': ai_provider or response_source,
+            'response_mode': response_source,
+            'fallback_used': bool(fallback_used),
+            'interrupted': bool(interrupted),
+            'word_count': _count_words(normalized_transcript),
+            'input_mode': 'realtime_streaming',
+        }
+    )
+    if tts_provider:
+        turn_metadata['tts_provider'] = tts_provider
+    turn_metadata.setdefault('realtime_persisted_at', timezone.now().isoformat())
+
+    turn = _create_turn_with_retry(
+        session=session,
+        create_kwargs={
+            'user_transcript': normalized_transcript,
+            'ai_response_text': normalized_ai_response,
+            'transcript_source': VoiceConversationTurn.TRANSCRIPT_SOURCE_DEEPGRAM_STREAMING,
+            'metadata': turn_metadata,
+        },
+    )
+
+    if ai_audio_content is not None and ai_audio_content_type:
+        _attach_ai_audio_content(turn, ai_audio_content, ai_audio_content_type)
+        turn_metadata['tts_generated'] = True
+        turn_metadata['tts_content_type'] = ai_audio_content_type
+    else:
+        turn_metadata.setdefault('tts_generated', False)
 
     turn.metadata = turn_metadata
     update_fields = ['metadata']

@@ -222,10 +222,12 @@ class VoiceConversationSession(models.Model):
 class VoiceConversationTurn(models.Model):
     TRANSCRIPT_SOURCE_MANUAL = 'manual'
     TRANSCRIPT_SOURCE_DEEPGRAM = 'deepgram'
+    TRANSCRIPT_SOURCE_DEEPGRAM_STREAMING = 'deepgram_streaming'
     TRANSCRIPT_SOURCE_FALLBACK = 'fallback'
     TRANSCRIPT_SOURCE_CHOICES = (
         (TRANSCRIPT_SOURCE_MANUAL, 'Manual'),
         (TRANSCRIPT_SOURCE_DEEPGRAM, 'Deepgram'),
+        (TRANSCRIPT_SOURCE_DEEPGRAM_STREAMING, 'Deepgram Streaming'),
         (TRANSCRIPT_SOURCE_FALLBACK, 'Fallback'),
     )
 

@@ -70,6 +70,7 @@ class VoiceConversationAPITests(APITestCase):
             ('post', '/api/voice-conversation/sessions/start/', {}),
             ('get', '/api/voice-conversation/sessions/', None),
             ('get', f'/api/voice-conversation/sessions/{session.id}/', None),
+            ('delete', f'/api/voice-conversation/sessions/{session.id}/', None),
             (
                 'post',
                 f'/api/voice-conversation/sessions/{session.id}/turns/',
@@ -134,6 +135,36 @@ class VoiceConversationAPITests(APITestCase):
 
         self.authenticate()
         response = self.client.get(f'/api/voice-conversation/sessions/{session.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_user_can_delete_own_session_and_related_turns(self):
+        session = VoiceConversationSession.objects.create(
+            user=self.user,
+            title='Delete me',
+        )
+        VoiceConversationTurn.objects.create(
+            session=session,
+            turn_number=1,
+            user_transcript='Please remove this practice session.',
+            ai_response_text='Practice feedback only: Session can be deleted.',
+            transcript_source=VoiceConversationTurn.TRANSCRIPT_SOURCE_FALLBACK,
+        )
+
+        self.authenticate()
+        response = self.client.delete(f'/api/voice-conversation/sessions/{session.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = self.assert_success_response(response)
+        self.assertEqual(data, {})
+        self.assertFalse(VoiceConversationSession.objects.filter(pk=session.id).exists())
+        self.assertFalse(VoiceConversationTurn.objects.filter(session_id=session.id).exists())
+
+    def test_user_cannot_delete_another_users_session(self):
+        session = VoiceConversationSession.objects.create(user=self.other_user)
+
+        self.authenticate()
+        response = self.client.delete(f'/api/voice-conversation/sessions/{session.id}/')
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
@@ -299,6 +330,26 @@ class VoiceConversationAPITests(APITestCase):
         turn = VoiceConversationTurn.objects.get(session_id=session_data['id'], turn_number=1)
         self.assertTrue(turn.user_audio.name.endswith('practice.webm'))
         self.assertEqual(turn.user_transcript, mock_transcribe_audio.return_value)
+
+    @patch('agents.voice_conversation_services.synthesize_tts')
+    def test_voice_conversation_audio_route_serves_generated_audio(self, mock_synthesize_tts):
+        mock_synthesize_tts.return_value = (b'fake-mp3-audio', 'audio/mpeg')
+        session_data = self.start_session(payload={'target_skill': 'general'})
+
+        response = self.client.post(
+            f"/api/voice-conversation/sessions/{session_data['id']}/turns/",
+            {'user_transcript': 'I want to practice more.'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = self.assert_success_response(response)
+        self.assertTrue(data['ai_audio'].startswith('/api/voice-conversation/media/'))
+
+        media_response = self.client.get(data['ai_audio'])
+        self.assertEqual(media_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(media_response['Content-Type'], 'audio/mpeg')
+        self.assertEqual(b''.join(media_response.streaming_content), b'fake-mp3-audio')
 
     @patch('agents.voice_conversation_services.synthesize_tts')
     @patch('agents.voice_conversation_services.call_llm_json')

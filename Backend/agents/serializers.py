@@ -1,3 +1,4 @@
+from django.urls import reverse
 from rest_framework import serializers
 
 from .models import (
@@ -81,6 +82,9 @@ class VoiceDiagnosticSessionDetailSerializer(VoiceDiagnosticSessionListSerialize
 
 
 class VoiceConversationTurnSerializer(serializers.ModelSerializer):
+    user_audio = serializers.SerializerMethodField()
+    ai_audio = serializers.SerializerMethodField()
+
     class Meta:
         model = VoiceConversationTurn
         fields = [
@@ -102,6 +106,20 @@ class VoiceConversationTurnSerializer(serializers.ModelSerializer):
             'user_audio',
             'ai_audio',
         ]
+
+    def _build_audio_url(self, file_field):
+        if not file_field:
+            return None
+        return reverse(
+            'voice-conversation-media',
+            kwargs={'file_path': file_field.name},
+        )
+
+    def get_user_audio(self, obj):
+        return self._build_audio_url(obj.user_audio)
+
+    def get_ai_audio(self, obj):
+        return self._build_audio_url(obj.ai_audio)
 
 
 class VoiceConversationSessionSerializer(serializers.ModelSerializer):

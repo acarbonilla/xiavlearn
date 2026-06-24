@@ -22,6 +22,7 @@ from .views import (
     VoiceConversationSessionDetailView,
     VoiceConversationSessionEndView,
     VoiceConversationSessionListView,
+    VoiceConversationMediaView,
     VoiceConversationSessionStartView,
     VoiceConversationTurnCreateView,
 )
@@ -216,5 +217,10 @@ urlpatterns = [
         'voice-conversation/sessions/<int:session_id>/end/',
         VoiceConversationSessionEndView.as_view(),
         name='voice-conversation-session-end',
+    ),
+    path(
+        'voice-conversation/media/<path:file_path>/',
+        VoiceConversationMediaView.as_view(),
+        name='voice-conversation-media',
     ),
 ]
