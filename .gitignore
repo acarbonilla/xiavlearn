@@ -55,3 +55,9 @@ Frontend/out/
 Frontend/build/
 !Frontend/.env.local
 !Frontend/package-lock.json
+
+# Voice conversation runtime media
+Backend/voice-conversation/ai-audio/*
+!Backend/voice-conversation/ai-audio/.gitkeep
+Backend/voice-conversation/user-audio/*
+!Backend/voice-conversation/user-audio/.gitkeep

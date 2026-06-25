@@ -472,6 +472,12 @@ def parse_assistant_playback_complete_event(content):
     }
 
 
+def parse_end_turn_event(content):
+    return {
+        'event_id': validate_optional_event_id(content.get('event_id')),
+    }
+
+
 def _require_string(content, field_name, *, max_length):
     value = content.get(field_name)
     if not isinstance(value, str) or not value.strip():

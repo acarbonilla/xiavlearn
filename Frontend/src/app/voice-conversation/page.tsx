@@ -469,7 +469,7 @@ export default function VoiceConversationPage() {
   const [realtimeError, setRealtimeError] = useState("");
   const [realtimeNotice, setRealtimeNotice] = useState("");
   const [realtimeEventMessage, setRealtimeEventMessage] = useState(
-    "Start the experiment to open a WebSocket and stream microphone chunks.",
+    "Connect the realtime socket first, then start speaking when you are ready.",
   );
   const [realtimeChunkCount, setRealtimeChunkCount] = useState(0);
   const [realtimeAckCount, setRealtimeAckCount] = useState(0);
@@ -477,7 +477,7 @@ export default function VoiceConversationPage() {
   const [realtimeProtocolVersion, setRealtimeProtocolVersion] = useState("");
   const [realtimeTransport, setRealtimeTransport] = useState("");
   const [realtimeSessionStatus, setRealtimeSessionStatus] = useState("");
-  const [realtimeSttState, setRealtimeSttState] = useState("Not started");
+  const [realtimeSttState, setRealtimeSttState] = useState("Idle");
   const [realtimeAiState, setRealtimeAiState] = useState("Idle");
   const [realtimeTtsState, setRealtimeTtsState] = useState("Idle");
   const [realtimeTtsChunkCount, setRealtimeTtsChunkCount] = useState(0);
@@ -498,8 +498,10 @@ export default function VoiceConversationPage() {
   const realtimeStatusEventRef = useRef(0);
   const realtimeStopRequestedRef = useRef(false);
   const realtimeDisconnectRequestedRef = useRef(false);
+  const realtimeEndTurnRequestedRef = useRef(false);
   const realtimeActiveAiResponseIdRef = useRef<string | null>(null);
   const realtimeInterruptedResponseIdsRef = useRef<Set<string>>(new Set());
+  const realtimeLastChunkSendRef = useRef<Promise<void> | null>(null);
   const realtimeTtsBuffersRef = useRef<
     Record<string, { contentType: string; chunks: string[] }>
   >({});
@@ -690,6 +692,23 @@ export default function VoiceConversationPage() {
     );
   }
 
+  function sendRealtimeEndTurn() {
+    const socket = realtimeSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    realtimeStatusEventRef.current += 1;
+    socket.send(
+      JSON.stringify({
+        type: "end_turn",
+        event_id: `end-turn-${realtimeStatusEventRef.current}`,
+      }),
+    );
+    console.info("FRONTEND_END_TURN_SENT");
+    return true;
+  }
+
   function interruptAssistantOutputLocally(reason: string) {
     const activeResponseId = realtimeActiveAiResponseIdRef.current;
     const playingResponseId = realtimePlayingResponseId;
@@ -725,11 +744,26 @@ export default function VoiceConversationPage() {
     realtimeInterruptedResponseIdsRef.current.clear();
     setRealtimeConnectionStatus("stopped");
     setRealtimeRecordingStatus("stopped");
-    setRealtimeSttState("Stopped");
+    setRealtimeSttState("Idle");
     setRealtimeAiState("Idle");
     setRealtimeTtsState("Idle");
     setRealtimeEventMessage("Realtime experiment stopped.");
     setRealtimeNotice(notice);
+  }
+
+  function handleRealtimeSttFailure(message: string, state: "error" | "unavailable") {
+    realtimeStopRequestedRef.current = true;
+    discardRealtimeCapture();
+    setRealtimeConnectionStatus("connected");
+    setRealtimeRecordingStatus("stopped");
+    setRealtimeSttState(state === "unavailable" ? "Unavailable" : "Error");
+    setRealtimeAiState("Idle");
+    setRealtimeTtsState("Idle");
+    setRealtimeError(message);
+    setRealtimeEventMessage("Realtime speech capture stopped.");
+    setRealtimeNotice(
+      "The realtime socket is still connected, but speech capture is unavailable for this session. Disconnect or continue with the turn-based transcript/audio flow below.",
+    );
   }
 
   function failRealtimeExperiment(message: string) {
@@ -750,6 +784,29 @@ export default function VoiceConversationPage() {
     setRealtimeNotice(
       "Realtime is optional. Continue with the turn-based transcript or audio flow below.",
     );
+  }
+
+  async function finalizeRealtimeTurnAfterRecorderStop() {
+    const lastChunkSend = realtimeLastChunkSendRef.current;
+    if (lastChunkSend) {
+      await lastChunkSend.catch(() => undefined);
+    }
+
+    if (realtimeDisconnectRequestedRef.current) {
+      return;
+    }
+
+    setRealtimeSttState("Finalizing");
+    setRealtimeEventMessage("Waiting for final transcript.");
+    sendRealtimeClientStatus({
+      capture_state: "finalizing_turn",
+      chunk_sequence: realtimeChunkSequenceRef.current,
+      input_mode: "realtime_test",
+      mic_available: true,
+    });
+    if (sendRealtimeEndTurn()) {
+      realtimeEndTurnRequestedRef.current = false;
+    }
   }
 
   async function sendRealtimeAudioChunk(blob: Blob, mimeType: string, isFinal: boolean) {
@@ -775,13 +832,14 @@ export default function VoiceConversationPage() {
         mime_type: mimeType,
         size_bytes: blob.size,
         duration_ms: REALTIME_CHUNK_TIMESLICE_MS,
-        is_final: isFinal,
+        is_final: false,
         audio_base64: audioBase64,
       }),
     );
     setRealtimeChunkCount((current) => current + 1);
     setRealtimeEventMessage(`Sent chunk ${sequence} (${blob.size} bytes).`);
     if (isFinal) {
+      console.info("FRONTEND_FINAL_CHUNK_SENT");
       setRealtimeEventMessage("Final audio chunk sent. Waiting for transcript and teacher response.");
     }
   }
@@ -805,15 +863,19 @@ export default function VoiceConversationPage() {
         }
         const chunkMimeType = recorder.mimeType || event.data.type || "audio/webm";
         const isFinal = realtimeStopRequestedRef.current;
-        void sendRealtimeAudioChunk(event.data, chunkMimeType, isFinal).catch((error) => {
-          failRealtimeExperiment(
-            error instanceof Error
-              ? error.message
-              : "Unable to send a realtime audio chunk.",
-          );
-        });
+        const sendPromise = sendRealtimeAudioChunk(event.data, chunkMimeType, isFinal).catch(
+          (error) => {
+            failRealtimeExperiment(
+              error instanceof Error
+                ? error.message
+                : "Unable to send a realtime audio chunk.",
+            );
+          },
+        );
+        realtimeLastChunkSendRef.current = sendPromise;
       };
       recorder.onstop = () => {
+        console.info("FRONTEND_RECORDER_STOPPED");
         realtimeRecorderRef.current = null;
         stopRealtimeTracks();
         if (
@@ -821,12 +883,17 @@ export default function VoiceConversationPage() {
           realtimeSocketRef.current?.readyState === WebSocket.OPEN
         ) {
           setRealtimeRecordingStatus("stopped");
-          setRealtimeEventMessage("Microphone stopped. Waiting for transcript and teacher response.");
+          setRealtimeEventMessage("Microphone stopped. Waiting for final transcript.");
+          if (realtimeEndTurnRequestedRef.current) {
+            void finalizeRealtimeTurnAfterRecorderStop();
+          }
         }
       };
 
       realtimeRecorderRef.current = recorder;
       realtimeStopRequestedRef.current = false;
+      realtimeEndTurnRequestedRef.current = false;
+      realtimeLastChunkSendRef.current = null;
       recorder.start(REALTIME_CHUNK_TIMESLICE_MS);
       setRealtimeRecordingStatus("recording");
       setRealtimeEventMessage("Microphone connected. Sending audio chunks.");
@@ -841,43 +908,24 @@ export default function VoiceConversationPage() {
     }
   }
 
-  async function handleStartRealtimeTest() {
+  async function handleConnectRealtime() {
     if (!selectedSession) {
-      setRealtimeError("Select a voice conversation session before starting the realtime test.");
+      setRealtimeError("Select a voice conversation session before connecting realtime.");
       setRealtimeNotice("");
       return;
     }
     if (selectedSession.status !== "active") {
-      setRealtimeError("Realtime test is only available for active practice sessions.");
+      setRealtimeError("Realtime is only available for active practice sessions.");
       setRealtimeNotice("Start a new session to keep using the existing V5A practice flow.");
-      return;
-    }
-    if (!navigator.mediaDevices || typeof MediaRecorder === "undefined") {
-      setRealtimeError(
-        "Realtime microphone streaming is not available in this browser. Use the turn-based controls below instead.",
-      );
-      setRealtimeNotice(
-        "V5A remains available. Type a transcript, upload audio, or record a turn below.",
-      );
       return;
     }
 
     setRealtimeError("");
     setRealtimeNotice("");
-
-    const existingSocket = realtimeSocketRef.current;
-    if (existingSocket && existingSocket.readyState === WebSocket.OPEN) {
-      realtimeDisconnectRequestedRef.current = false;
-      if (hasInterruptibleAssistantOutput()) {
-        interruptAssistantOutputLocally("Learner interrupted the current teacher output.");
-        sendRealtimeInterrupt(
-          "learner_speaking",
-          "Learner started speaking while the teacher output was active.",
-        );
-      }
-      setRealtimeRecordingStatus("requesting_permission");
-      setRealtimeEventMessage("Reusing the realtime socket. Requesting microphone permission.");
-      await beginRealtimeCapture();
+    if (realtimeSocketRef.current?.readyState === WebSocket.OPEN) {
+      setRealtimeConnectionStatus("connected");
+      setRealtimeRecordingStatus("idle");
+      setRealtimeEventMessage("Realtime socket already connected. Start speaking when ready.");
       return;
     }
 
@@ -894,7 +942,7 @@ export default function VoiceConversationPage() {
     setRealtimeProtocolVersion("");
     setRealtimeTransport("");
     setRealtimeSessionStatus(selectedSession.status);
-    setRealtimeSttState("Connecting to STT");
+    setRealtimeSttState("Idle");
     setRealtimeAiState("Idle");
     setRealtimeTtsState("Idle");
     setRealtimeTtsChunkCount(0);
@@ -906,7 +954,7 @@ export default function VoiceConversationPage() {
     realtimeActiveAiResponseIdRef.current = null;
     realtimeInterruptedResponseIdsRef.current.clear();
     setRealtimeConnectionStatus("connecting");
-    setRealtimeRecordingStatus("requesting_permission");
+    setRealtimeRecordingStatus("idle");
     setRealtimeEventMessage("Opening realtime socket.");
 
     const socket = new WebSocket(getVoiceConversationRealtimeUrl(selectedSession.id));
@@ -914,13 +962,13 @@ export default function VoiceConversationPage() {
 
     socket.onopen = () => {
       setRealtimeConnectionStatus("connected");
-      setRealtimeEventMessage("Realtime socket connected. Requesting microphone permission.");
+      setRealtimeRecordingStatus("idle");
+      setRealtimeEventMessage("Realtime socket connected. Start speaking when ready.");
       sendRealtimeClientStatus({
-        capture_state: "requesting_permission",
+        capture_state: "idle",
         input_mode: "realtime_test",
-        mic_available: false,
+        mic_available: !!navigator.mediaDevices,
       });
-      void beginRealtimeCapture();
     };
 
     socket.onmessage = (event) => {
@@ -951,19 +999,28 @@ export default function VoiceConversationPage() {
         if (message.type === "stt_status") {
           setRealtimeSttState(`${message.provider}: ${message.state}`);
           setRealtimeEventMessage(message.message);
+          if (message.state === "no_speech") {
+            setRealtimeError("");
+            setRealtimeAiState("Idle");
+            setRealtimeTtsState("Idle");
+            setRealtimeNotice(message.message);
+            return;
+          }
           if (message.state === "unavailable" || message.state === "error") {
-            failRealtimeExperiment(message.message);
+            handleRealtimeSttFailure(message.message, message.state);
           }
           return;
         }
 
         if (message.type === "transcript_partial") {
+          setRealtimeSttState("Listening");
           setRealtimePartialTranscript(message.transcript);
           setRealtimeEventMessage("Receiving partial transcript from realtime STT.");
           return;
         }
 
         if (message.type === "transcript_final") {
+          setRealtimeSttState("Transcript ready");
           setRealtimePartialTranscript("");
           setRealtimeFinalTranscripts((current) => [...current, message.transcript]);
           setRealtimeEventMessage("Received final transcript from realtime STT.");
@@ -1205,13 +1262,60 @@ export default function VoiceConversationPage() {
     };
   }
 
+  async function handleStartRealtimeCapture() {
+    if (!selectedSession) {
+      setRealtimeError("Select a voice conversation session before starting to speak.");
+      setRealtimeNotice("");
+      return;
+    }
+    if (selectedSession.status !== "active") {
+      setRealtimeError("Realtime speech capture is only available for active practice sessions.");
+      setRealtimeNotice("Start a new session to keep using the existing V5A practice flow.");
+      return;
+    }
+    if (!navigator.mediaDevices || typeof MediaRecorder === "undefined") {
+      setRealtimeError(
+        "Realtime microphone streaming is not available in this browser. Use the turn-based controls below instead.",
+      );
+      setRealtimeNotice(
+        "V5A remains available. Type a transcript, upload audio, or record a turn below.",
+      );
+      return;
+    }
+
+    const socket = realtimeSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setRealtimeError("Connect realtime before you start speaking.");
+      setRealtimeNotice(
+        "Open the websocket first with Connect Realtime, or continue with the V5A controls below.",
+      );
+      return;
+    }
+
+    setRealtimeError("");
+    setRealtimeNotice("");
+    realtimeDisconnectRequestedRef.current = false;
+    if (hasInterruptibleAssistantOutput()) {
+      interruptAssistantOutputLocally("Learner interrupted the current teacher output.");
+      sendRealtimeInterrupt(
+        "learner_speaking",
+        "Learner started speaking while the teacher output was active.",
+      );
+    }
+    setRealtimeRecordingStatus("requesting_permission");
+    setRealtimeEventMessage("Requesting microphone permission.");
+    await beginRealtimeCapture();
+  }
+
   function handleEndRealtimeTurn() {
     const recorder = realtimeRecorderRef.current;
     if (!recorder || recorder.state === "inactive") {
       return;
     }
 
+    console.info("FRONTEND_END_TURN_CLICKED");
     realtimeStopRequestedRef.current = true;
+    realtimeEndTurnRequestedRef.current = true;
     setRealtimeError("");
     setRealtimeRecordingStatus("stopping");
     setRealtimeEventMessage("Ending the current learner turn.");
@@ -1342,6 +1446,8 @@ export default function VoiceConversationPage() {
       realtimeRecorderRef.current = null;
       realtimeStreamRef.current?.getTracks().forEach((track) => track.stop());
       realtimeStreamRef.current = null;
+      realtimeLastChunkSendRef.current = null;
+      realtimeEndTurnRequestedRef.current = false;
 
       const socket = realtimeSocketRef.current;
       if (socket) {
@@ -1758,6 +1864,8 @@ export default function VoiceConversationPage() {
     !!selectedSession &&
     selectedSession.status === "active" &&
     realtimeConnectionStatus === "connected" &&
+    realtimeSttState !== "Error" &&
+    realtimeSttState !== "Unavailable" &&
     realtimeRecordingStatus !== "recording" &&
     realtimeRecordingStatus !== "requesting_permission" &&
     realtimeRecordingStatus !== "stopping";
@@ -2177,14 +2285,14 @@ export default function VoiceConversationPage() {
                   <div className="mt-5 flex flex-wrap gap-3">
                     <Button
                       disabled={!realtimeCanConnect}
-                      onClick={() => void handleStartRealtimeTest()}
+                      onClick={() => void handleConnectRealtime()}
                       type="button"
                     >
                       Connect Realtime
                     </Button>
                     <Button
                       disabled={!realtimeCanStartSpeaking}
-                      onClick={() => void handleStartRealtimeTest()}
+                      onClick={() => void handleStartRealtimeCapture()}
                       type="button"
                       variant="secondary"
                     >

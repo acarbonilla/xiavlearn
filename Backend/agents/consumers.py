@@ -7,6 +7,7 @@ import time
 from collections import deque
 
 from django.conf import settings
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import Count
 
 from channels.db import database_sync_to_async
@@ -37,6 +38,7 @@ from .realtime_protocol import (
     parse_assistant_playback_complete_event,
     parse_audio_chunk_event,
     parse_client_status_event,
+    parse_end_turn_event,
     parse_interrupt_event,
     parse_ping_event,
 )
@@ -50,7 +52,12 @@ from .voice_conversation_services import (
     create_realtime_voice_conversation_turn,
     generate_voice_conversation_response,
 )
-from .voice_services import VoiceDiagnosticConfigError, VoiceDiagnosticError, synthesize_tts
+from .voice_services import (
+    VoiceDiagnosticConfigError,
+    VoiceDiagnosticError,
+    synthesize_tts,
+    transcribe_audio,
+)
 
 
 AI_RESPONSE_TARGET_CHARS = 48
@@ -124,6 +131,16 @@ class VoiceConversationSessionConsumer(AsyncJsonWebsocketConsumer):
         self.current_assistant_state = 'idle'
         self.interrupted_response_ids = set()
         self.persisted_realtime_turns = {}
+        self.turn_audio_chunk_count = 0
+        self.turn_audio_bytes = bytearray()
+        self.turn_audio_mime_type = None
+        self.turn_finalize_requested = False
+        self.turn_final_transcript = None
+        self.turn_partial_transcript = None
+        self.turn_final_transcript_waiter = None
+        self.turn_finalize_task = None
+        self.realtime_stt_chunk_queue = asyncio.Queue()
+        self.realtime_stt_forwarder_task = asyncio.create_task(self._stt_forwarder_loop())
         now = time.monotonic()
         self.connection_started_at = now
         self.last_client_event_at = now
@@ -139,6 +156,8 @@ class VoiceConversationSessionConsumer(AsyncJsonWebsocketConsumer):
 
     async def disconnect(self, close_code):
         await self._cancel_idle_watchdog_task()
+        await self._cancel_stt_forwarder_task()
+        await self._cancel_finalize_task()
         await self._cancel_active_ai_response_task()
         await self._close_realtime_stt_session()
         if hasattr(self, 'group_name'):
@@ -224,10 +243,25 @@ class VoiceConversationSessionConsumer(AsyncJsonWebsocketConsumer):
                 await self._complete_assistant_playback(playback_complete_event['response_id'])
                 return
 
+            if message_type == 'end_turn':
+                logger.info('BACKEND_END_TURN_RECEIVED session=%s', self.session_id)
+                parse_end_turn_event(content)
+                await self._finalize_stt_turn(trigger='end_turn')
+                return
+
             if message_type == 'audio_chunk':
                 audio_chunk_event = parse_audio_chunk_event(content)
+                logger.info(
+                    'BACKEND_AUDIO_CHUNK_RECEIVED session=%s size=%s sequence=%s',
+                    self.session_id,
+                    audio_chunk_event['size_bytes'],
+                    audio_chunk_event['sequence'],
+                )
                 if not await self._register_audio_chunk(audio_chunk_event):
                     return
+                self.turn_audio_bytes.extend(audio_chunk_event['audio_bytes'])
+                if self.turn_audio_mime_type is None:
+                    self.turn_audio_mime_type = audio_chunk_event['mime_type']
                 await self.send_json(
                     build_audio_chunk_ack_event(
                         self.session_id,
@@ -235,7 +269,9 @@ class VoiceConversationSessionConsumer(AsyncJsonWebsocketConsumer):
                         audio_chunk_event,
                     )
                 )
-                await self._forward_audio_chunk_to_stt(audio_chunk_event)
+                await self.realtime_stt_chunk_queue.put(audio_chunk_event)
+                if audio_chunk_event['is_final']:
+                    await self._finalize_stt_turn(trigger='final_chunk')
                 return
         except RealtimeProtocolError as exc:
             await self.send_json(
@@ -267,8 +303,13 @@ class VoiceConversationSessionConsumer(AsyncJsonWebsocketConsumer):
                 reason='Learner audio took priority over the current AI output.',
             )
 
-        try:
-            if self.realtime_stt_session is None:
+        if self.realtime_stt_session is None:
+            try:
+                logger.info(
+                    'BACKEND_STT_CONNECT_START session=%s mime_type=%s',
+                    self.session_id,
+                    audio_chunk_event['mime_type'],
+                )
                 self.realtime_stt_session = create_realtime_stt_session(
                     session_id=self.session_id,
                     mime_type=audio_chunk_event['mime_type'],
@@ -282,48 +323,98 @@ class VoiceConversationSessionConsumer(AsyncJsonWebsocketConsumer):
                         10,
                     ),
                 )
-
-            await asyncio.wait_for(
-                self.realtime_stt_session.send_audio_chunk(
-                    audio_chunk_event['audio_bytes'],
-                    is_final=audio_chunk_event['is_final'],
-                ),
-                timeout=_int_setting(
-                    'VOICE_CONVERSATION_REALTIME_STT_FORWARD_TIMEOUT_SECONDS',
-                    10,
-                ),
-            )
-        except RealtimeSttConfigError as exc:
-            logger.warning(
-                'Realtime STT is unavailable for session %s: %s',
-                self.session_id,
-                exc,
-            )
-            self.realtime_stt_disabled = True
-            await self.send_json(
-                build_stt_status_event(
+                logger.info('BACKEND_STT_CONNECT_OK session=%s', self.session_id)
+            except RealtimeSttConfigError as exc:
+                logger.warning(
+                    'Realtime STT is unavailable for session %s: %s',
                     self.session_id,
-                    state='unavailable',
-                    provider='deepgram',
-                    message=(
-                        'Realtime speech-to-text is unavailable. '
-                        'Use the standard voice turn flow for this session.'
-                    ),
+                    exc,
                 )
+                self.realtime_stt_disabled = True
+                await self.send_json(
+                    build_stt_status_event(
+                        self.session_id,
+                        state='unavailable',
+                        provider='deepgram',
+                        message=(
+                            'Realtime speech-to-text is unavailable. '
+                            'Use the standard voice turn flow for this session.'
+                        ),
+                    )
+                )
+                await self._close_realtime_stt_session()
+                return
+            except asyncio.TimeoutError:
+                logger.warning(
+                    'Realtime STT timed out for session %s while connecting.',
+                    self.session_id,
+                )
+                logger.warning('BACKEND_STT_TIMEOUT session=%s stage=connect', self.session_id)
+                await self._disable_realtime_stt(
+                    'Realtime speech-to-text timed out. '
+                    'Use the standard voice turn flow for this session.'
+                )
+                return
+            except RealtimeSttError as exc:
+                logger.warning(
+                    'Realtime STT failed for session %s during connect: %s',
+                    self.session_id,
+                    exc,
+                )
+                await self._disable_realtime_stt(
+                    'Realtime speech-to-text is unavailable. '
+                    'Use the standard voice turn flow for this session.'
+                )
+                return
+            except Exception:
+                logger.exception(
+                    'Unexpected realtime STT connect failure for session %s.',
+                    self.session_id,
+                )
+                await self._disable_realtime_stt(
+                    'Realtime speech-to-text is unavailable. '
+                    'Use the standard voice turn flow for this session.'
+                )
+                return
+
+        try:
+            self.turn_audio_chunk_count += 1
+            logger.info(
+                'BACKEND_AUDIO_FORWARD_START session=%s size=%s sequence=%s',
+                self.session_id,
+                audio_chunk_event['size_bytes'],
+                audio_chunk_event['sequence'],
             )
-            await self._close_realtime_stt_session()
+            session = self.realtime_stt_session
+            if session is None:
+                logger.info(
+                    'BACKEND_AUDIO_FORWARD_ABORTED session=%s reason=session_closed_before_send',
+                    self.session_id,
+                )
+                return
+            await session.send_audio_chunk(
+                audio_chunk_event['audio_bytes'],
+                is_final=False,
+            )
+            logger.info(
+                'BACKEND_AUDIO_FORWARD_OK session=%s size=%s sequence=%s',
+                self.session_id,
+                audio_chunk_event['size_bytes'],
+                audio_chunk_event['sequence'],
+            )
         except asyncio.TimeoutError:
             logger.warning(
-                'Realtime STT timed out for session %s while forwarding audio.',
+                'BACKEND_AUDIO_FORWARD_FAILED session=%s reason=timeout',
                 self.session_id,
             )
+            logger.warning('BACKEND_STT_TIMEOUT session=%s stage=audio_forward', self.session_id)
             await self._disable_realtime_stt(
-                'Realtime speech-to-text timed out. '
+                'Realtime speech-to-text is unavailable. '
                 'Use the standard voice turn flow for this session.'
             )
         except RealtimeSttError as exc:
             logger.warning(
-                'Realtime STT failed for session %s: %s',
+                'BACKEND_AUDIO_FORWARD_FAILED session=%s reason=%s',
                 self.session_id,
                 exc,
             )
@@ -335,6 +426,11 @@ class VoiceConversationSessionConsumer(AsyncJsonWebsocketConsumer):
             logger.exception(
                 'Unexpected realtime STT forwarding failure for session %s.',
                 self.session_id,
+            )
+            logger.warning(
+                'BACKEND_AUDIO_FORWARD_FAILED session=%s reason=%s',
+                self.session_id,
+                exc,
             )
             await self._disable_realtime_stt(
                 'Realtime speech-to-text is unavailable. '
@@ -372,18 +468,265 @@ class VoiceConversationSessionConsumer(AsyncJsonWebsocketConsumer):
         speech_final,
         provider_event_type,
     ):
+        normalized_transcript = transcript.strip()
+        if normalized_transcript:
+            if is_final:
+                logger.info(
+                    'BACKEND_STT_TRANSCRIPT_FINAL session=%s text=%s',
+                    self.session_id,
+                    normalized_transcript,
+                )
+                self.turn_final_transcript = normalized_transcript
+                logger.info(
+                    'BACKEND_STT_FINAL_TRANSCRIPT_RECEIVED session=%s transcript=%s',
+                    self.session_id,
+                    normalized_transcript,
+                )
+            else:
+                logger.info(
+                    'BACKEND_STT_TRANSCRIPT_PARTIAL session=%s text=%s',
+                    self.session_id,
+                    normalized_transcript,
+                )
+                self.turn_partial_transcript = normalized_transcript
+            await self.send_json(
+                build_transcript_event(
+                    self.session_id,
+                    provider=provider,
+                    transcript=normalized_transcript,
+                    is_final=is_final,
+                    speech_final=speech_final,
+                    provider_event_type=provider_event_type,
+                )
+            )
+        elif is_final and self.turn_finalize_requested:
+            logger.info('BACKEND_STT_EMPTY_TRANSCRIPT session=%s', self.session_id)
+
+        if is_final and self.turn_final_transcript_waiter is not None:
+            if not self.turn_final_transcript_waiter.done():
+                self.turn_final_transcript_waiter.set_result(self.turn_final_transcript)
+
+    async def _stt_forwarder_loop(self):
+        while True:
+            audio_chunk_event = await self.realtime_stt_chunk_queue.get()
+            try:
+                await self._forward_audio_chunk_to_stt(audio_chunk_event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    'Unexpected realtime STT forwarder failure for session %s.',
+                    self.session_id,
+                )
+            finally:
+                self.realtime_stt_chunk_queue.task_done()
+
+    async def _finalize_stt_turn(self, *, trigger):
+        if self.realtime_stt_disabled:
+            return
+
+        if self.turn_finalize_task is not None and not self.turn_finalize_task.done():
+            await self.turn_finalize_task
+            return
+
+        self.turn_finalize_task = asyncio.create_task(
+            self._run_finalize_stt_turn(trigger=trigger)
+        )
+        try:
+            await self.turn_finalize_task
+        finally:
+            if self.turn_finalize_task is not None and self.turn_finalize_task.done():
+                self.turn_finalize_task = None
+
+    async def _run_finalize_stt_turn(self, *, trigger):
+        self.turn_finalize_requested = True
+        try:
+            if self.turn_final_transcript:
+                await self._start_ai_response_stream(self.turn_final_transcript)
+                return
+
+            await self.realtime_stt_chunk_queue.join()
+
+            if self.turn_final_transcript:
+                await self._start_ai_response_stream(self.turn_final_transcript)
+                return
+
+            if not self.turn_audio_bytes:
+                await self._emit_no_speech_detected()
+                return
+
+            if self.turn_audio_chunk_count <= 0 or self.realtime_stt_session is None:
+                transcript = await self._transcribe_turn_audio_fallback()
+                if transcript:
+                    await self._emit_final_transcript_from_fallback(transcript)
+                    await self._start_ai_response_stream(transcript)
+                    return
+                await self._emit_no_speech_detected()
+                return
+
+            logger.info(
+                'BACKEND_STT_FINALIZE_STARTED session=%s trigger=%s',
+                self.session_id,
+                trigger,
+            )
+            loop = asyncio.get_running_loop()
+            self.turn_final_transcript_waiter = loop.create_future()
+            if self.turn_final_transcript and not self.turn_final_transcript_waiter.done():
+                self.turn_final_transcript_waiter.set_result(self.turn_final_transcript)
+            await asyncio.wait_for(
+                self.realtime_stt_session.finalize_current_turn(),
+                timeout=_int_setting(
+                    'VOICE_CONVERSATION_REALTIME_STT_FINALIZE_TIMEOUT_SECONDS',
+                    5,
+                ),
+            )
+            transcript = await asyncio.wait_for(
+                self.turn_final_transcript_waiter,
+                timeout=_int_setting(
+                    'VOICE_CONVERSATION_REALTIME_STT_FINAL_TRANSCRIPT_TIMEOUT_SECONDS',
+                    5,
+                ),
+            )
+            if transcript and transcript.strip():
+                await self._start_ai_response_stream(transcript)
+                return
+
+            transcript = await self._transcribe_turn_audio_fallback()
+            if transcript:
+                await self._emit_final_transcript_from_fallback(transcript)
+                await self._start_ai_response_stream(transcript)
+                return
+
+            await self._emit_no_speech_detected()
+        except asyncio.TimeoutError:
+            logger.warning(
+                'BACKEND_STT_TIMEOUT session=%s trigger=%s',
+                self.session_id,
+                trigger,
+            )
+            if self.turn_partial_transcript:
+                logger.info(
+                    'BACKEND_STT_FINAL_TRANSCRIPT_RECEIVED session=%s transcript=%s source=partial_fallback',
+                    self.session_id,
+                    self.turn_partial_transcript,
+                )
+                await self.send_json(
+                    build_transcript_event(
+                        self.session_id,
+                        provider='deepgram',
+                        transcript=self.turn_partial_transcript,
+                        is_final=True,
+                        speech_final=True,
+                        provider_event_type='FinalizeTimeoutFallback',
+                    )
+                )
+                self.turn_final_transcript = self.turn_partial_transcript
+                await self._start_ai_response_stream(self.turn_partial_transcript)
+                return
+
+            transcript = await self._transcribe_turn_audio_fallback()
+            if transcript:
+                await self._emit_final_transcript_from_fallback(transcript)
+                await self._start_ai_response_stream(transcript)
+                return
+
+            await self._emit_no_speech_detected()
+        finally:
+            await self._reset_stt_turn_state(close_session=True)
+
+    async def _emit_no_speech_detected(self):
+        logger.info('BACKEND_STT_EMPTY_TRANSCRIPT session=%s', self.session_id)
+        await self.send_json(
+            build_stt_status_event(
+                self.session_id,
+                state='no_speech',
+                provider='deepgram',
+                message='No speech detected. Please try again.',
+            )
+        )
+
+    async def _reset_stt_turn_state(self, *, close_session):
+        if self.turn_final_transcript_waiter is not None and not self.turn_final_transcript_waiter.done():
+            self.turn_final_transcript_waiter.set_result(None)
+        self.turn_final_transcript_waiter = None
+        self.turn_audio_chunk_count = 0
+        self.turn_audio_bytes = bytearray()
+        self.turn_audio_mime_type = None
+        self.turn_finalize_requested = False
+        self.turn_final_transcript = None
+        self.turn_partial_transcript = None
+        if close_session:
+            await self._close_realtime_stt_session()
+
+    async def _transcribe_turn_audio_fallback(self):
+        if not self.turn_audio_bytes:
+            return None
+
+        filename = 'realtime-turn.webm'
+        mime_type = self.turn_audio_mime_type or 'audio/webm'
+        if mime_type.startswith('audio/mp4'):
+            filename = 'realtime-turn.mp4'
+
+        logger.info(
+            'BACKEND_STT_FALLBACK_START session=%s mime_type=%s size=%s',
+            self.session_id,
+            mime_type,
+            len(self.turn_audio_bytes),
+        )
+
+        audio_file = SimpleUploadedFile(
+            filename,
+            bytes(self.turn_audio_bytes),
+            content_type=mime_type,
+        )
+        try:
+            transcript = await asyncio.to_thread(transcribe_audio, audio_file)
+        except VoiceDiagnosticConfigError as exc:
+            logger.warning(
+                'BACKEND_STT_FALLBACK_FAILED session=%s reason=config_error error=%s',
+                self.session_id,
+                exc,
+            )
+            return None
+        except VoiceDiagnosticError as exc:
+            logger.info(
+                'BACKEND_STT_FALLBACK_EMPTY session=%s error=%s',
+                self.session_id,
+                exc,
+            )
+            return None
+        except Exception as exc:
+            logger.warning(
+                'BACKEND_STT_FALLBACK_FAILED session=%s reason=unexpected error=%s',
+                self.session_id,
+                exc,
+            )
+            return None
+
+        transcript = (transcript or '').strip()
+        if not transcript:
+            logger.info('BACKEND_STT_FALLBACK_EMPTY session=%s error=empty_transcript', self.session_id)
+            return None
+
+        logger.info(
+            'BACKEND_STT_FALLBACK_TRANSCRIPT_RECEIVED session=%s transcript=%s',
+            self.session_id,
+            transcript,
+        )
+        self.turn_final_transcript = transcript
+        return transcript
+
+    async def _emit_final_transcript_from_fallback(self, transcript):
         await self.send_json(
             build_transcript_event(
                 self.session_id,
-                provider=provider,
+                provider='deepgram',
                 transcript=transcript,
-                is_final=is_final,
-                speech_final=speech_final,
-                provider_event_type=provider_event_type,
+                is_final=True,
+                speech_final=True,
+                provider_event_type='FallbackListenApi',
             )
         )
-        if is_final and transcript.strip():
-            await self._start_ai_response_stream(transcript)
 
     async def _start_ai_response_stream(self, transcript):
         normalized_transcript = transcript.strip()
@@ -888,6 +1231,28 @@ class VoiceConversationSessionConsumer(AsyncJsonWebsocketConsumer):
     async def _cancel_active_ai_response_task(self):
         task = self.active_ai_response_task
         self.active_ai_response_task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+
+    async def _cancel_finalize_task(self):
+        task = self.turn_finalize_task
+        self.turn_finalize_task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+
+    async def _cancel_stt_forwarder_task(self):
+        task = getattr(self, 'realtime_stt_forwarder_task', None)
+        self.realtime_stt_forwarder_task = None
         if task is None:
             return
         task.cancel()

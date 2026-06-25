@@ -1,3 +1,4 @@
+import asyncio
 from importlib import import_module
 from uuid import uuid4
 from unittest.mock import patch
@@ -11,10 +12,13 @@ from django.contrib.auth import (
     SESSION_KEY,
 )
 from django.contrib.auth.models import User
-from django.test import TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 
 from agents.models import VoiceConversationSession, VoiceConversationTurn
-from agents.realtime_stt import RealtimeSttConfigError
+from agents.realtime_stt import (
+    DeepgramRealtimeTranscriptionSession,
+    RealtimeSttConfigError,
+)
 from agents.voice_services import VoiceDiagnosticError
 from xiavlearn.asgi import application
 
@@ -42,17 +46,130 @@ class FakeRealtimeSttSession:
             speech_final=False,
             provider_event_type='Results',
         )
-        if is_final:
-            await self.transcript_callback(
-                provider='deepgram',
-                transcript='hello teacher today',
-                is_final=True,
-                speech_final=True,
-                provider_event_type='Results',
-            )
+
+    async def finalize_current_turn(self):
+        await self.transcript_callback(
+            provider='deepgram',
+            transcript='hello teacher today',
+            is_final=True,
+            speech_final=True,
+            provider_event_type='Results',
+        )
 
     async def close(self):
         self.closed = True
+
+
+class FinalizeTimeoutRealtimeSttSession:
+    def __init__(self, **kwargs):
+        self.closed = False
+
+    async def start(self):
+        return None
+
+    async def send_audio_chunk(self, audio_bytes, *, is_final):
+        return None
+
+    async def finalize_current_turn(self):
+        raise asyncio.TimeoutError()
+
+    async def close(self):
+        self.closed = True
+
+
+class DelayedStartRealtimeSttSession(FakeRealtimeSttSession):
+    async def start(self):
+        await asyncio.sleep(0.05)
+        await super().start()
+
+
+class RealtimeSttSessionTests(SimpleTestCase):
+    @override_settings(DEEPGRAM_API_KEY='test-deepgram-key')
+    @patch('deepgram.AsyncDeepgramClient')
+    def test_start_returns_without_waiting_for_listener_loop(self, async_client_cls):
+        class FakeEventType:
+            OPEN = 'open'
+            MESSAGE = 'message'
+            CLOSE = 'close'
+            ERROR = 'error'
+
+        class FakeConnection:
+            def __init__(self):
+                self.handlers = {}
+                self.listener_started = asyncio.Event()
+                self.listener_cancelled = asyncio.Event()
+                self.close_stream_sent = False
+
+            def on(self, event_type, handler):
+                self.handlers[event_type] = handler
+
+            async def start_listening(self):
+                self.listener_started.set()
+                open_handler = self.handlers.get(FakeEventType.OPEN)
+                if open_handler is not None:
+                    open_handler(None)
+                try:
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    self.listener_cancelled.set()
+                    raise
+
+            async def send_close_stream(self):
+                self.close_stream_sent = True
+
+            async def send_keep_alive(self):
+                return None
+
+        class FakeConnectionContextManager:
+            def __init__(self, connection):
+                self.connection = connection
+
+            async def __aenter__(self):
+                return self.connection
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+        fake_connection = FakeConnection()
+        fake_client = async_client_cls.return_value
+        fake_client.listen.v1.connect.return_value = FakeConnectionContextManager(fake_connection)
+        statuses = []
+
+        async def status_callback(**payload):
+            statuses.append(payload)
+
+        async def transcript_callback(**payload):
+            return None
+
+        async def scenario():
+            session = DeepgramRealtimeTranscriptionSession(
+                session_id=14,
+                mime_type='audio/webm',
+                status_callback=status_callback,
+                transcript_callback=transcript_callback,
+            )
+
+            await asyncio.wait_for(session.start(), timeout=0.2)
+            await asyncio.wait_for(fake_connection.listener_started.wait(), timeout=0.2)
+
+            async def wait_for_ready_status():
+                while not any(status['state'] == 'ready' for status in statuses):
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(wait_for_ready_status(), timeout=0.2)
+
+            self.assertEqual(statuses[0]['state'], 'initializing')
+            self.assertTrue(
+                any(status['state'] == 'ready' for status in statuses),
+                statuses,
+            )
+
+            await session.close()
+            await asyncio.wait_for(fake_connection.listener_cancelled.wait(), timeout=0.2)
+            self.assertTrue(fake_connection.close_stream_sent)
+
+        with patch('deepgram.core.events.EventType', FakeEventType):
+            async_to_sync(scenario)()
 
 
 class VoiceConversationRealtimeTests(TransactionTestCase):
@@ -330,8 +447,15 @@ class VoiceConversationRealtimeTests(TransactionTestCase):
                         'mime_type': 'audio/webm',
                         'size_bytes': 3,
                         'duration_ms': 1000,
-                        'is_final': True,
+                        'is_final': False,
                         'audio_base64': 'AQID',
+                    }
+                )
+
+                await communicator.send_json_to(
+                    {
+                        'type': 'end_turn',
+                        'event_id': 'end-turn-1',
                     }
                 )
 
@@ -466,7 +590,7 @@ class VoiceConversationRealtimeTests(TransactionTestCase):
                 await communicator.disconnect()
 
             async_to_sync(scenario)()
-        self.assertEqual(session_holder['session'].sent_chunks, [(b'\x01\x02\x03', True)])
+        self.assertEqual(session_holder['session'].sent_chunks, [(b'\x01\x02\x03', False)])
         self.assertEqual(VoiceConversationTurn.objects.count(), 1)
         saved_turn = VoiceConversationTurn.objects.get()
         self.assertEqual(
@@ -541,7 +665,7 @@ class VoiceConversationRealtimeTests(TransactionTestCase):
                 await communicator.disconnect()
 
             async_to_sync(scenario)()
-        self.assertEqual(session_holder['session'].sent_chunks, [(b'\x01\x02\x03', True)])
+        self.assertEqual(session_holder['session'].sent_chunks, [(b'\x01\x02\x03', False)])
 
     @patch('agents.consumers.create_realtime_stt_session')
     def test_tts_failure_emits_tts_audio_error(self, create_realtime_stt_session):
@@ -632,7 +756,7 @@ class VoiceConversationRealtimeTests(TransactionTestCase):
                 await communicator.disconnect()
 
             async_to_sync(scenario)()
-        self.assertEqual(session_holder['session'].sent_chunks, [(b'\x01\x02\x03', True)])
+        self.assertEqual(session_holder['session'].sent_chunks, [(b'\x01\x02\x03', False)])
         self.assertEqual(VoiceConversationTurn.objects.count(), 1)
         saved_turn = VoiceConversationTurn.objects.get()
         self.assertFalse(saved_turn.ai_audio)
@@ -734,7 +858,7 @@ class VoiceConversationRealtimeTests(TransactionTestCase):
                 await communicator.disconnect()
 
             async_to_sync(scenario)()
-        self.assertEqual(session_holder['session'].sent_chunks, [(b'\x01\x02\x03', True)])
+        self.assertEqual(session_holder['session'].sent_chunks, [(b'\x01\x02\x03', False)])
         saved_turn = VoiceConversationTurn.objects.get()
         self.assertTrue(saved_turn.metadata['interrupted'])
         self.assertEqual(saved_turn.metadata['interruption_trigger'], 'interrupt_button')
@@ -744,11 +868,11 @@ class VoiceConversationRealtimeTests(TransactionTestCase):
         self,
         create_realtime_stt_session,
     ):
-        session_holder = {}
+        session_holder = {'sessions': []}
 
         def create_session(**kwargs):
             session = FakeRealtimeSttSession(**kwargs)
-            session_holder['session'] = session
+            session_holder['sessions'].append(session)
             return session
 
         create_realtime_stt_session.side_effect = create_session
@@ -814,7 +938,12 @@ class VoiceConversationRealtimeTests(TransactionTestCase):
                 new_ack_event = await communicator.receive_json_from()
                 interrupt_event = await communicator.receive_json_from()
                 interrupted_turn_event = await communicator.receive_json_from()
-                new_partial_event = await communicator.receive_json_from()
+                next_event = await communicator.receive_json_from()
+                if next_event['type'] == 'stt_status':
+                    self.assertEqual(next_event['state'], 'ready')
+                    new_partial_event = await communicator.receive_json_from()
+                else:
+                    new_partial_event = next_event
 
                 self.assertEqual(new_ack_event['type'], 'audio_chunk_ack')
                 self.assertEqual(new_ack_event['sequence'], 2)
@@ -839,10 +968,9 @@ class VoiceConversationRealtimeTests(TransactionTestCase):
                 await communicator.disconnect()
 
             async_to_sync(scenario)()
-        self.assertEqual(
-            session_holder['session'].sent_chunks,
-            [(b'\x01\x02\x03', True), (b'\x01\x02\x03', False)],
-        )
+        self.assertEqual(len(session_holder['sessions']), 2)
+        self.assertEqual(session_holder['sessions'][0].sent_chunks, [(b'\x01\x02\x03', False)])
+        self.assertEqual(session_holder['sessions'][1].sent_chunks, [(b'\x01\x02\x03', False)])
         saved_turn = VoiceConversationTurn.objects.get()
         self.assertTrue(saved_turn.metadata['interrupted'])
         self.assertEqual(saved_turn.metadata['interruption_trigger'], 'learner_audio')
@@ -899,6 +1027,199 @@ class VoiceConversationRealtimeTests(TransactionTestCase):
 
         async_to_sync(scenario)()
         self.assertTrue(create_realtime_stt_session.called)
+
+    @patch('agents.consumers.create_realtime_stt_session')
+    def test_stt_finalize_timeout_emits_no_speech_status_without_closing_socket(
+        self,
+        create_realtime_stt_session,
+    ):
+        create_realtime_stt_session.return_value = FinalizeTimeoutRealtimeSttSession()
+        owner_cookie = self._session_cookie(self.user)
+
+        with patch(
+            'agents.consumers.transcribe_audio',
+            side_effect=VoiceDiagnosticError('Speech-to-text did not detect a clear transcript.'),
+        ):
+            async def scenario():
+                communicator = self._communicator(
+                    f'/ws/voice-conversation/sessions/{self.session.id}/',
+                    session_cookie=owner_cookie,
+                )
+                connected, _ = await communicator.connect()
+                self.assertTrue(connected)
+                await communicator.receive_json_from()
+                await communicator.receive_json_from()
+
+                await communicator.send_json_to(
+                    {
+                        'type': 'audio_chunk',
+                        'event_id': 'chunk-timeout-1',
+                        'chunk_id': 'chunk-timeout-1',
+                        'sequence': 1,
+                        'mime_type': 'audio/webm',
+                        'size_bytes': 3,
+                        'duration_ms': 1000,
+                        'is_final': False,
+                        'audio_base64': 'AQID',
+                    }
+                )
+
+                ack_event = await communicator.receive_json_from()
+                await communicator.send_json_to({'type': 'end_turn', 'event_id': 'end-turn-timeout-1'})
+                stt_status_event = await communicator.receive_json_from()
+
+                self.assertEqual(ack_event['type'], 'audio_chunk_ack')
+                self.assertEqual(stt_status_event['type'], 'stt_status')
+                self.assertEqual(stt_status_event['state'], 'no_speech')
+                self.assertEqual(
+                    stt_status_event['message'],
+                    'No speech detected. Please try again.',
+                )
+
+                await communicator.send_json_to({'type': 'ping', 'event_id': 'ping-after-timeout'})
+                pong_event = await communicator.receive_json_from()
+                self.assertEqual(pong_event['type'], 'pong')
+                self.assertEqual(pong_event['event_id'], 'ping-after-timeout')
+
+                await communicator.disconnect()
+
+            async_to_sync(scenario)()
+        self.assertTrue(create_realtime_stt_session.called)
+
+    @patch('agents.consumers.create_realtime_stt_session')
+    def test_stt_finalize_timeout_uses_batch_transcription_fallback(
+        self,
+        create_realtime_stt_session,
+    ):
+        create_realtime_stt_session.return_value = FinalizeTimeoutRealtimeSttSession()
+        owner_cookie = self._session_cookie(self.user)
+        streamed_response = 'Practice feedback only: Nice detail. Teacher follow-up: What next?'
+
+        with patch(
+            'agents.consumers.transcribe_audio',
+            return_value='hello from fallback transcript',
+        ), patch(
+            'agents.consumers.generate_voice_conversation_response',
+            return_value=(streamed_response, 'deterministic_fallback'),
+        ), patch(
+            'agents.consumers.synthesize_tts',
+            return_value=(b'fallback-tts', 'audio/mpeg'),
+        ):
+            async def scenario():
+                communicator = self._communicator(
+                    f'/ws/voice-conversation/sessions/{self.session.id}/',
+                    session_cookie=owner_cookie,
+                )
+                connected, _ = await communicator.connect()
+                self.assertTrue(connected)
+                await communicator.receive_json_from()
+                await communicator.receive_json_from()
+
+                await communicator.send_json_to(
+                    {
+                        'type': 'audio_chunk',
+                        'event_id': 'chunk-fallback-1',
+                        'chunk_id': 'chunk-fallback-1',
+                        'sequence': 1,
+                        'mime_type': 'audio/webm',
+                        'size_bytes': 3,
+                        'duration_ms': 1000,
+                        'is_final': False,
+                        'audio_base64': 'AQID',
+                    }
+                )
+
+                ack_event = await communicator.receive_json_from()
+                await communicator.send_json_to({'type': 'end_turn', 'event_id': 'end-turn-fallback-1'})
+                final_transcript_event = await communicator.receive_json_from()
+                ai_start_event = await communicator.receive_json_from()
+
+                self.assertEqual(ack_event['type'], 'audio_chunk_ack')
+                self.assertEqual(final_transcript_event['type'], 'transcript_final')
+                self.assertEqual(final_transcript_event['transcript'], 'hello from fallback transcript')
+                self.assertEqual(final_transcript_event['provider_event_type'], 'FallbackListenApi')
+                self.assertEqual(ai_start_event['type'], 'ai_response_start')
+                self.assertEqual(ai_start_event['transcript'], 'hello from fallback transcript')
+
+                await communicator.disconnect()
+
+            async_to_sync(scenario)()
+        self.assertTrue(create_realtime_stt_session.called)
+
+    @patch('agents.consumers.create_realtime_stt_session')
+    def test_end_turn_waits_for_inflight_stt_connect_before_no_speech(
+        self,
+        create_realtime_stt_session,
+    ):
+        session_holder = {}
+
+        def create_session(**kwargs):
+            session = DelayedStartRealtimeSttSession(**kwargs)
+            session_holder['session'] = session
+            return session
+
+        create_realtime_stt_session.side_effect = create_session
+        owner_cookie = self._session_cookie(self.user)
+        streamed_response = (
+            'Practice feedback only: Good detail. Teacher follow-up: '
+            'What happened after that?'
+        )
+
+        with patch(
+            'agents.consumers.generate_voice_conversation_response',
+            return_value=(streamed_response, 'deterministic_fallback'),
+        ), patch(
+            'agents.consumers.synthesize_tts',
+            return_value=(b'fake-realtime-tts', 'audio/mpeg'),
+        ):
+            async def scenario():
+                communicator = self._communicator(
+                    f'/ws/voice-conversation/sessions/{self.session.id}/',
+                    session_cookie=owner_cookie,
+                )
+                connected, _ = await communicator.connect()
+                self.assertTrue(connected)
+                await communicator.receive_json_from()
+                await communicator.receive_json_from()
+
+                await communicator.send_json_to(
+                    {
+                        'type': 'audio_chunk',
+                        'event_id': 'chunk-race-1',
+                        'chunk_id': 'chunk-race-1',
+                        'sequence': 1,
+                        'mime_type': 'audio/webm;codecs=opus',
+                        'size_bytes': 3,
+                        'duration_ms': 1000,
+                        'is_final': False,
+                        'audio_base64': 'AQID',
+                    }
+                )
+                await communicator.send_json_to(
+                    {
+                        'type': 'end_turn',
+                        'event_id': 'end-turn-race-1',
+                    }
+                )
+
+                ack_event = await communicator.receive_json_from()
+                stt_status_event = await communicator.receive_json_from()
+                partial_event = await communicator.receive_json_from()
+                final_event = await communicator.receive_json_from()
+
+                self.assertEqual(ack_event['type'], 'audio_chunk_ack')
+                self.assertEqual(stt_status_event['type'], 'stt_status')
+                self.assertEqual(stt_status_event['state'], 'ready')
+                self.assertEqual(partial_event['type'], 'transcript_partial')
+                self.assertEqual(final_event['type'], 'transcript_final')
+                self.assertEqual(final_event['transcript'], 'hello teacher today')
+
+                await communicator.disconnect()
+
+            async_to_sync(scenario)()
+
+        self.assertTrue(create_realtime_stt_session.called)
+        self.assertEqual(session_holder['session'].sent_chunks, [(b'\x01\x02\x03', False)])
 
     def test_invalid_audio_payload_is_rejected(self):
         owner_cookie = self._session_cookie(self.user)

@@ -33,6 +33,7 @@ class DeepgramRealtimeTranscriptionSession:
         self._client = None
         self._connection_cm = None
         self._connection = None
+        self._listener_task = None
         self._keepalive_task = None
         self._closed = False
 
@@ -71,13 +72,7 @@ class DeepgramRealtimeTranscriptionSession:
         )
         self._connection.on(
             EventType.CLOSE,
-            lambda _: self._schedule(
-                self.status_callback(
-                    state='closed',
-                    provider='deepgram',
-                    message='Deepgram realtime STT stream closed.',
-                )
-            ),
+            lambda _: self._schedule(self._handle_close_event()),
         )
         self._connection.on(
             EventType.ERROR,
@@ -95,21 +90,26 @@ class DeepgramRealtimeTranscriptionSession:
             provider='deepgram',
             message='Opening Deepgram realtime STT stream.',
         )
-        await self._connection.start_listening()
+        self._listener_task = asyncio.create_task(self._connection.start_listening())
+        self._listener_task.add_done_callback(self._log_background_task_failure)
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
-    async def send_audio_chunk(self, audio_bytes, *, is_final):
+    async def send_audio_chunk(self, audio_bytes, *, is_final=False):
         if self._connection is None:
             raise RealtimeSttError('Realtime STT stream is not connected.')
 
         await self._connection.send_media(audio_bytes)
-        if is_final:
-            await self.status_callback(
-                state='finalizing',
-                provider='deepgram',
-                message='Finalizing realtime STT transcript.',
-            )
-            await self._connection.send_finalize()
+
+    async def finalize_current_turn(self):
+        if self._connection is None:
+            raise RealtimeSttError('Realtime STT stream is not connected.')
+
+        await self.status_callback(
+            state='finalizing',
+            provider='deepgram',
+            message='Finalizing realtime STT transcript.',
+        )
+        await self._connection.send_finalize()
 
     async def close(self):
         if self._closed:
@@ -130,8 +130,24 @@ class DeepgramRealtimeTranscriptionSession:
             with suppress(Exception):
                 await self._connection_cm.__aexit__(None, None, None)
 
+        if self._listener_task is not None:
+            if not self._listener_task.done():
+                self._listener_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._listener_task
+            self._listener_task = None
+
         self._connection = None
         self._connection_cm = None
+
+    async def _handle_close_event(self):
+        if self._closed:
+            return
+        await self.status_callback(
+            state='closed',
+            provider='deepgram',
+            message='Deepgram realtime STT stream closed.',
+        )
 
     def _build_connect_kwargs(self):
         kwargs = {
@@ -176,14 +192,16 @@ class DeepgramRealtimeTranscriptionSession:
             return
 
         transcript = self._extract_transcript(message).strip()
-        if not transcript:
+        is_final = bool(getattr(message, 'is_final', False))
+        speech_final = bool(getattr(message, 'speech_final', False))
+        if not transcript and not is_final:
             return
 
         await self.transcript_callback(
             provider='deepgram',
             transcript=transcript,
-            is_final=bool(getattr(message, 'is_final', False)),
-            speech_final=bool(getattr(message, 'speech_final', False)),
+            is_final=is_final,
+            speech_final=speech_final,
             provider_event_type=message_type,
         )
 
@@ -238,6 +256,14 @@ class DeepgramRealtimeTranscriptionSession:
         exc = task.exception()
         if exc is not None:
             logger.warning('Realtime STT callback failed: %s', exc)
+
+    @staticmethod
+    def _log_background_task_failure(task):
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning('Realtime STT background task failed: %s', exc)
 
 
 def create_realtime_stt_session(*, session_id, mime_type, status_callback, transcript_callback):
