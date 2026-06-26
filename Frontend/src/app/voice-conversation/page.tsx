@@ -44,6 +44,18 @@ type RealtimeAiResponse = {
   wasInterrupted: boolean;
 };
 
+type ConversationMessage = {
+  key: string;
+  speaker: "teacher" | "learner";
+  text: string;
+  audioUrl: string | null;
+  isLive?: boolean;
+  meta?: string;
+  timestamp?: string;
+  turnId?: number;
+  responseId?: string | null;
+};
+
 type RealtimeServerEvent =
   | {
       type: "connected";
@@ -438,6 +450,74 @@ function parseRealtimeServerEvent(rawData: string): RealtimeServerEvent {
   return parsed;
 }
 
+type RealtimeLearnerPhase =
+  | "disconnected"
+  | "connecting"
+  | "ready"
+  | "recording"
+  | "responding"
+  | "error";
+
+function getVoiceConversationSkillLabel(skill: VoiceConversationTargetSkill) {
+  if (skill === "speaking") {
+    return "Speaking";
+  }
+  if (skill === "listening") {
+    return "Listening";
+  }
+  if (skill === "pronunciation") {
+    return "Pronunciation";
+  }
+  return "General";
+}
+
+function getTranscriptSourceLabel(
+  source: VoiceConversationSessionDetail["turns"][number]["transcript_source"],
+) {
+  if (source === "manual") {
+    return "Typed";
+  }
+  if (source === "deepgram") {
+    return "Uploaded audio";
+  }
+  if (source === "deepgram_streaming") {
+    return "Realtime speech";
+  }
+  return "Fallback";
+}
+
+function getRealtimeLearnerPhaseTone(phase: RealtimeLearnerPhase) {
+  if (phase === "ready" || phase === "responding") {
+    return "border-[#b7ebd6] bg-[#effcf6] text-[#157347]";
+  }
+  if (phase === "connecting" || phase === "recording") {
+    return "border-[#cfe0ff] bg-[#eef3ff] text-[#335cff]";
+  }
+  if (phase === "error") {
+    return "border-[#f5c2c7] bg-[#fff1f2] text-[#b42318]";
+  }
+  return "border-[#dce4ef] bg-white text-[#60708a]";
+}
+
+function getRealtimeLearnerPhaseLabel(phase: RealtimeLearnerPhase) {
+  if (phase === "connecting") {
+    return "Connecting";
+  }
+  if (phase === "ready") {
+    return "Ready";
+  }
+  if (phase === "recording") {
+    return "Listening";
+  }
+  if (phase === "responding") {
+    return "Teacher speaking";
+  }
+  if (phase === "error") {
+    return "Needs fallback";
+  }
+  return "Disconnected";
+}
+
 export default function VoiceConversationPage() {
   const [sessions, setSessions] = useState<VoiceConversationSessionSummary[]>([]);
   const [selectedSession, setSelectedSession] =
@@ -458,6 +538,7 @@ export default function VoiceConversationPage() {
   const [targetSkill, setTargetSkill] =
     useState<VoiceConversationTargetSkill>("speaking");
   const [inputMode, setInputMode] = useState<InputMode>("transcript");
+  const [isStandardPracticeOpen, setIsStandardPracticeOpen] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [pendingAudio, setPendingAudio] = useState<PendingAudio | null>(null);
   const [recorderState, setRecorderState] = useState<RecorderState>("idle");
@@ -491,6 +572,7 @@ export default function VoiceConversationPage() {
   const recordedChunksRef = useRef<BlobPart[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const recordingPreviewRef = useRef<HTMLAudioElement | null>(null);
+  const standardPracticeRef = useRef<HTMLDivElement | null>(null);
   const realtimeSocketRef = useRef<WebSocket | null>(null);
   const realtimeRecorderRef = useRef<MediaRecorder | null>(null);
   const realtimeStreamRef = useRef<MediaStream | null>(null);
@@ -1563,6 +1645,12 @@ export default function VoiceConversationPage() {
     setRecordingError("");
   }
 
+  function openStandardPractice(nextMode: InputMode = "transcript") {
+    setIsStandardPracticeOpen(true);
+    handleInputModeChange(nextMode);
+    standardPracticeRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   async function refreshSessions(preferredSessionId?: number) {
     const nextSessions = await getVoiceConversationSessions();
     setSessions(nextSessions);
@@ -1585,6 +1673,7 @@ export default function VoiceConversationPage() {
     try {
       const detail = await getVoiceConversationSession(sessionId);
       setSelectedSession(detail);
+      setIsStandardPracticeOpen(false);
       resetComposer();
     } catch (requestError) {
       setPageError(
@@ -1610,6 +1699,7 @@ export default function VoiceConversationPage() {
         target_skill: targetSkill,
       });
       await refreshSessions(startedSession.id);
+      setIsStandardPracticeOpen(false);
       resetComposer();
       resetSessionSetup();
       setIsSessionModalOpen(false);
@@ -1892,15 +1982,124 @@ export default function VoiceConversationPage() {
     realtimeSocketReady ||
     realtimeRecordingStatus === "recording" ||
     realtimeRecordingStatus === "requesting_permission";
+  const lastSavedTurn =
+    selectedSession && selectedSession.turns.length
+      ? selectedSession.turns[selectedSession.turns.length - 1]
+      : null;
+  const lastSavedLearnerTranscript = lastSavedTurn?.user_transcript.trim() ?? "";
+  const lastSavedTeacherResponse = lastSavedTurn?.ai_response_text.trim() ?? "";
+  const latestRealtimeFinalTranscript =
+    realtimeFinalTranscripts.length > 0
+      ? realtimeFinalTranscripts[realtimeFinalTranscripts.length - 1].trim()
+      : "";
+  const learnerTranscriptPreview = (
+    realtimePartialTranscript || latestRealtimeFinalTranscript
+  ).trim();
+  const latestVisibleRealtimeResponse =
+    [...realtimeAiResponses].reverse().find((response) => !response.wasInterrupted) ?? null;
+  const currentTeacherFeedbackResponseId = latestVisibleRealtimeResponse?.responseId ?? null;
+  const currentTeacherFeedbackText = (
+    realtimeAiStreamingText ||
+    latestVisibleRealtimeResponse?.responseText ||
+    ""
+  ).trim();
+  const currentTeacherFeedbackAudioUrl = latestVisibleRealtimeResponse?.audioUrl ?? null;
+  const realtimeHasLearnerError = realtimeConnectionStatus === "error" || !!realtimeError;
+  const showLiveLearnerTranscript =
+    !!learnerTranscriptPreview && learnerTranscriptPreview !== lastSavedLearnerTranscript;
+  const showCurrentTeacherFeedback =
+    !!currentTeacherFeedbackText && currentTeacherFeedbackText !== lastSavedTeacherResponse;
+
+  let realtimeLearnerPhase: RealtimeLearnerPhase = "disconnected";
+  if (realtimeHasLearnerError) {
+    realtimeLearnerPhase = "error";
+  } else if (realtimeConnectionStatus === "connecting") {
+    realtimeLearnerPhase = "connecting";
+  } else if (
+    realtimeRecordingStatus === "recording" ||
+    realtimeRecordingStatus === "requesting_permission" ||
+    realtimeRecordingStatus === "stopping"
+  ) {
+    realtimeLearnerPhase = "recording";
+  } else if (realtimeConnectionStatus === "connected" && realtimeHasInterruptibleOutput) {
+    realtimeLearnerPhase = "responding";
+  } else if (realtimeConnectionStatus === "connected") {
+    realtimeLearnerPhase = "ready";
+  }
+
+  const realtimeLearnerPhaseCopy =
+    realtimeLearnerPhase === "connecting"
+      ? "Opening the live practice connection now."
+      : realtimeLearnerPhase === "ready"
+        ? "Start speaking when you are ready. Microphone permission is requested only after you tap Start Speaking."
+        : realtimeLearnerPhase === "recording"
+          ? realtimeRecordingStatus === "requesting_permission"
+            ? "Waiting for microphone permission."
+            : "Listening to your voice now."
+          : realtimeLearnerPhase === "responding"
+            ? "The teacher is replying. You can interrupt and speak again if needed."
+            : realtimeLearnerPhase === "error"
+              ? "Realtime speech had a problem. You can continue with standard practice below."
+              : "Start realtime practice when you want a live exchange. Microphone permission is requested only after you choose Start Speaking.";
+  const liveTeacherBubbleText =
+    currentTeacherFeedbackText ||
+    (realtimeLearnerPhase === "responding" ? "Teacher is responding..." : "");
+  const showLiveTeacherBubble =
+    !!liveTeacherBubbleText &&
+    (showCurrentTeacherFeedback ||
+      (realtimeLearnerPhase === "responding" && !currentTeacherFeedbackText));
+
+  const conversationMessages: ConversationMessage[] = [];
+  if (selectedSession) {
+    selectedSession.turns.forEach((turn) => {
+      conversationMessages.push({
+        key: `learner-turn-${turn.id}`,
+        speaker: "learner",
+        text: turn.user_transcript,
+        audioUrl: resolveApiAssetUrl(turn.user_audio),
+        meta: `Turn ${turn.turn_number} | ${getTranscriptSourceLabel(turn.transcript_source)}`,
+        timestamp: formatDate(turn.created_at),
+      });
+      conversationMessages.push({
+        key: `teacher-turn-${turn.id}`,
+        speaker: "teacher",
+        text: turn.ai_response_text,
+        audioUrl: resolveApiAssetUrl(turn.ai_audio),
+        meta: `Reply to turn ${turn.turn_number}`,
+        timestamp: formatDate(turn.created_at),
+        turnId: turn.id,
+      });
+    });
+  }
+  if (showLiveLearnerTranscript) {
+    conversationMessages.push({
+      key: `learner-live-${learnerTranscriptPreview}`,
+      speaker: "learner",
+      text: learnerTranscriptPreview,
+      audioUrl: null,
+      isLive: true,
+      meta: realtimePartialTranscript ? "Listening now" : "Ready to save",
+    });
+  }
+  if (showLiveTeacherBubble) {
+    conversationMessages.push({
+      key: `teacher-live-${currentTeacherFeedbackResponseId ?? liveTeacherBubbleText}`,
+      speaker: "teacher",
+      text: liveTeacherBubbleText,
+      audioUrl: currentTeacherFeedbackAudioUrl,
+      isLive: true,
+      meta: realtimeLearnerPhase === "responding" ? "Live response" : "Current response",
+      responseId: currentTeacherFeedbackResponseId,
+    });
+  }
 
   return (
     <main className="page-shell">
-      <p className="eyebrow">Turn-based voice practice</p>
+      <p className="eyebrow">Voice conversation practice</p>
       <h1 className="page-title">Voice Conversation Teacher</h1>
       <p className="page-copy">
-        Start a practice-only conversation session, send transcript or audio
-        one turn at a time, and review the AI teacher response with optional
-        playback when audio is available.
+        Practice with a live teacher-style conversation when realtime is available,
+        or switch to one turn at a time whenever you prefer.
       </p>
 
       {pageError ? <div className="error-box">{pageError}</div> : null}
@@ -1976,8 +2175,13 @@ export default function VoiceConversationPage() {
                             {getSessionTitle(session)}
                           </p>
                           <p className="mt-1 text-xs uppercase tracking-[0.12em] text-[#60708a]">
-                            {session.target_skill} | {session.status}
+                            {getVoiceConversationSkillLabel(session.target_skill)} | {session.status}
                           </p>
+                          {session.cefr_level ? (
+                            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.12em] text-[#335cff]">
+                              CEFR {session.cefr_level}
+                            </p>
+                          ) : null}
                         </button>
                         <div className="flex flex-col items-end gap-2">
                           <span className="text-xs font-semibold text-[#60708a]">
@@ -2047,7 +2251,7 @@ export default function VoiceConversationPage() {
                       Target skill
                     </p>
                     <p className="mt-2 font-bold text-[#14213d]">
-                      {selectedSession.target_skill}
+                      {getVoiceConversationSkillLabel(selectedSession.target_skill)}
                     </p>
                   </div>
                   <div>
@@ -2068,517 +2272,741 @@ export default function VoiceConversationPage() {
                   </div>
                 </div>
 
-                <div className="mt-6 rounded-[1.8rem] border border-[#d7e4ff] bg-[linear-gradient(135deg,#f8fbff_0%,#eef4ff_100%)] p-5">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#335cff]">
-                        Realtime Experiment
-                      </p>
-                      <h3 className="mt-2 text-xl font-black text-[#14213d]">
-                        Stream microphone chunks to the V5B socket
-                      </h3>
-                      <p className="mt-2 max-w-2xl text-sm leading-6 text-[#60708a]">
-                        This experiment uses the active practice session at{" "}
-                        <code>/ws/voice-conversation/sessions/{selectedSession.id}/</code>.
-                        It requests microphone permission only when you start
-                        speaking, keeps the websocket alive across turns, and
-                        supports controlled interruption so learner speech can
-                        preempt teacher playback. If anything fails, the V5A
-                        turn-based controls below remain available: Type
-                        Transcript, Upload Audio, Record Audio, End Session,
-                        and Practice History.
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-white px-3 py-1 text-sm font-bold text-[#335cff]">
-                      Experimental
-                    </span>
-                  </div>
-
-                  <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-                    <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                        Connection
-                      </p>
-                      <span
-                        className={`mt-3 inline-flex rounded-full border px-3 py-1 text-sm font-bold ${getRealtimeStatusTone(
-                          realtimeConnectionStatus,
-                        )}`}
-                      >
-                        {getRealtimeConnectionLabel(realtimeConnectionStatus)}
-                      </span>
-                    </div>
-                    <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                        Recorder
-                      </p>
-                      <span
-                        className={`mt-3 inline-flex rounded-full border px-3 py-1 text-sm font-bold ${getRealtimeStatusTone(
-                          realtimeRecordingStatus,
-                        )}`}
-                      >
-                        {getRealtimeRecordingLabel(realtimeRecordingStatus)}
-                      </span>
-                    </div>
-                    <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                        Chunks
-                      </p>
-                      <p className="mt-3 text-2xl font-black text-[#14213d]">
-                        {realtimeChunkCount}
-                      </p>
-                      <p className="mt-1 text-sm text-[#60708a]">
-                        Acked: {realtimeAckCount}
-                        {realtimeLastAckSequence ? ` | Last #${realtimeLastAckSequence}` : ""}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                        STT status
-                      </p>
-                      <p className="mt-3 text-sm font-bold text-[#14213d]">
-                        {realtimeSttState}
-                      </p>
-                      <p className="mt-1 text-sm text-[#60708a]">
-                        {realtimeTransport || "Awaiting socket"} | {realtimeProtocolVersion || "No protocol"} | Session{" "}
-                        {realtimeSessionStatus || "unknown"}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                        AI status
-                      </p>
-                      <p className="mt-3 text-sm font-bold text-[#14213d]">
-                        {realtimeAiState}
-                      </p>
-                      <p className="mt-1 text-sm text-[#60708a]">
-                        Practice-only teacher text stream
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                        TTS status
-                      </p>
-                      <p className="mt-3 text-sm font-bold text-[#14213d]">
-                        {realtimeTtsState}
-                      </p>
-                      <p className="mt-1 text-sm text-[#60708a]">
-                        Audio chunks: {realtimeTtsChunkCount}
-                      </p>
-                    </div>
-                  </div>
-
-                  {realtimeError ? (
-                    <div className="mt-4 rounded-2xl border border-[#f5c2c7] bg-[#fff1f2] px-4 py-3 text-sm text-[#b42318]">
-                      {realtimeError}
-                    </div>
-                  ) : null}
-                  {realtimeNotice ? <div className="note-box mt-4">{realtimeNotice}</div> : null}
-
-                  <div className="mt-4 rounded-2xl border border-[#dce4ef] bg-white p-4">
+                {selectedSession.final_feedback ? (
+                  <div className="mt-6 rounded-[1.5rem] border border-[#dce4ef] bg-[#f8fafc] p-4">
                     <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                      Latest realtime event
+                      Session feedback
                     </p>
                     <p className="mt-2 text-sm leading-6 text-[#14213d]">
-                      {realtimeEventMessage}
+                      {selectedSession.final_feedback}
                     </p>
                   </div>
+                ) : null}
 
-                  <div className="mt-4 grid gap-4 xl:grid-cols-3">
-                    <div className="rounded-2xl border border-[#dce4ef] bg-white p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                        Partial transcript
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-[#14213d]">
-                        {realtimePartialTranscript || "No partial transcript yet."}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-[#dce4ef] bg-white p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                        Final transcripts
-                      </p>
-                      {realtimeFinalTranscripts.length ? (
-                        <div className="mt-2 grid gap-2">
-                          {realtimeFinalTranscripts.map((item, index) => (
-                            <p
-                              className="rounded-xl bg-[#f8fafc] px-3 py-2 text-sm leading-6 text-[#14213d]"
-                              key={`${index}-${item}`}
-                            >
-                              {item}
-                            </p>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="mt-2 text-sm leading-6 text-[#14213d]">
-                          No final transcript yet.
-                        </p>
-                      )}
-                    </div>
-                    <div className="rounded-2xl border border-[#dce4ef] bg-white p-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                        AI teacher stream
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-[#14213d]">
-                        {realtimeAiStreamingText || "No AI response stream yet."}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 rounded-2xl border border-[#dce4ef] bg-white p-4">
-                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                      AI responses
-                    </p>
-                    {realtimeAiResponses.length ? (
-                      <div className="mt-2 grid gap-2">
-                        {realtimeAiResponses.map((response) => (
-                          <div
-                            className="rounded-xl bg-[#f8fafc] px-3 py-3"
-                            key={response.responseId}
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#60708a]">
-                                {response.responseSource}
-                              </p>
-                              {response.wasInterrupted ? (
-                                <span className="rounded-full border border-[#f5c2c7] bg-[#fff1f2] px-3 py-1 text-xs font-bold uppercase tracking-[0.12em] text-[#b42318]">
-                                  Interrupted
-                                </span>
-                              ) : response.audioUrl ? (
-                                <Button
-                                  className="px-3 py-2 text-xs"
-                                  onClick={() =>
-                                    void playRealtimeAiResponse(
-                                      response.responseId,
-                                      response.audioUrl,
-                                      "Unable to play the realtime teacher audio.",
-                                    )
-                                  }
-                                  type="button"
-                                  variant="secondary"
-                                >
-                                  {realtimePlayingResponseId === response.responseId
-                                    ? "Playing..."
-                                    : "Play Teacher Audio"}
-                                </Button>
-                              ) : null}
-                            </div>
-                            <p className="mt-2 text-sm leading-6 text-[#14213d]">
-                              {response.responseText}
-                            </p>
-                            {response.audioUrl && !response.wasInterrupted ? (
-                              <audio
-                                className="mt-3 w-full"
-                                controls
-                                preload="none"
-                                src={response.audioUrl}
-                              />
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="mt-2 text-sm leading-6 text-[#14213d]">
-                        No AI response yet.
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="mt-5 flex flex-wrap gap-3">
-                    <Button
-                      disabled={!realtimeCanConnect}
-                      onClick={() => void handleConnectRealtime()}
-                      type="button"
-                    >
-                      Connect Realtime
-                    </Button>
-                    <Button
-                      disabled={!realtimeCanStartSpeaking}
-                      onClick={() => void handleStartRealtimeCapture()}
-                      type="button"
-                      variant="secondary"
-                    >
-                      Start Speaking
-                    </Button>
-                    <Button
-                      disabled={!realtimeCanEndTurn}
-                      onClick={handleEndRealtimeTurn}
-                      type="button"
-                      variant="secondary"
-                    >
-                      End Current Turn
-                    </Button>
-                    <Button
-                      disabled={!realtimeCanInterrupt}
-                      onClick={() => void handleInterruptAndSpeak()}
-                      type="button"
-                      variant="secondary"
-                    >
-                      Interrupt and Speak
-                    </Button>
-                    <Button
-                      disabled={!realtimeCanDisconnect}
-                      onClick={handleStopRealtimeTest}
-                      type="button"
-                      variant="secondary"
-                    >
-                      Disconnect Realtime
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="mt-6 grid gap-4">
-                  {selectedSession.turns.length ? (
-                    selectedSession.turns.map((turn) => {
-                      const aiAudioUrl = resolveApiAssetUrl(turn.ai_audio);
-                      const userAudioUrl = resolveApiAssetUrl(turn.user_audio);
-                      return (
-                        <div className="grid gap-3" key={turn.id}>
-                          <div className="ml-auto w-full max-w-3xl rounded-[1.6rem] border border-[#bfd7ff] bg-[#eef4ff] p-5">
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#335cff]">
-                                Learner Turn {turn.turn_number}
-                              </p>
-                              <span className="text-xs font-semibold text-[#60708a]">
-                                {turn.transcript_source}
-                              </span>
-                            </div>
-                            <p className="mt-3 leading-7 text-[#14213d]">
-                              {turn.user_transcript}
-                            </p>
-                            {userAudioUrl ? (
-                              <audio
-                                className="mt-4 w-full"
-                                controls
-                                preload="none"
-                                src={userAudioUrl}
-                              />
-                            ) : null}
-                          </div>
-
-                          <div className="w-full max-w-3xl rounded-[1.6rem] border border-[#dce4ef] bg-white p-5 shadow-[0_14px_32px_rgba(20,33,61,0.06)]">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#20b486]">
-                                AI Teacher Response
-                              </p>
-                              <div className="flex flex-wrap gap-2">
-                                {turn.ai_audio ? (
-                                  <Button
-                                    disabled={playingTurnId === turn.id}
-                                    onClick={() => playAiAudio(turn.id, turn.ai_audio)}
-                                    type="button"
-                                    variant="secondary"
-                                  >
-                                    {playingTurnId === turn.id ? "Playing..." : "Play AI Audio"}
-                                  </Button>
-                                ) : null}
-                              </div>
-                            </div>
-                            <p className="mt-3 leading-7 text-[#14213d]">
-                              {turn.ai_response_text}
-                            </p>
-                            {aiAudioUrl ? (
-                              <audio
-                                className="mt-4 w-full"
-                                controls
-                                preload="none"
-                                src={aiAudioUrl}
-                              />
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="note-box">
-                      No turns yet. Send your first transcript or audio turn below.
-                    </div>
-                  )}
-                </div>
-
-                {selectedSession.status === "active" ? (
-                  <div className="mt-6 rounded-[1.8rem] border border-[#dce4ef] bg-[linear-gradient(135deg,#ffffff_0%,#f7faff_100%)] p-5">
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#335cff]">
-                          Send Next Turn
-                        </p>
-                        <h3 className="mt-2 text-xl font-black text-[#14213d]">
-                          How do you want to send your next turn?
-                        </h3>
-                        <p className="mt-2 max-w-2xl text-sm leading-6 text-[#60708a]">
-                          Choose one input mode at a time. Only the selected card
-                          stays visible so you can focus on the next practice turn.
-                        </p>
-                      </div>
-                      <span className="rounded-full bg-[#eef3ff] px-3 py-1 text-sm font-bold text-[#335cff]">
-                        Practice only
-                      </span>
-                    </div>
-
-                    <div className="mt-5 grid gap-3 md:grid-cols-3">
-                      {inputModeOptions.map((option) => (
-                        <button
-                          className={`rounded-2xl border p-4 text-left transition ${
-                            inputMode === option.value
-                              ? "border-[#335cff] bg-[#eef3ff]"
-                              : "border-[#dce4ef] bg-white hover:border-[#9cb2ff]"
-                          }`}
-                          key={option.value}
-                          onClick={() => handleInputModeChange(option.value)}
-                          type="button"
-                        >
-                          <p className="font-bold text-[#14213d]">{option.label}</p>
-                          <p className="mt-2 text-sm leading-6 text-[#60708a]">
-                            {option.description}
-                          </p>
-                        </button>
-                      ))}
-                    </div>
-
-                    {inputMode === "transcript" ? (
-                      <div className="mt-5 rounded-2xl border border-[#dce4ef] bg-white p-5">
-                        <label className="field-label" htmlFor="voice-conversation-transcript">
-                          Type Transcript
-                        </label>
-                        <p className="mt-2 text-sm leading-6 text-[#60708a]">
-                          Type your answer or paste what you said. This does not require a microphone.
-                        </p>
-                        <textarea
-                          className="text-area mt-4"
-                          id="voice-conversation-transcript"
-                          onChange={(event) => setTranscript(event.target.value)}
-                          placeholder="Type what you want to say to the teacher."
-                          value={transcript}
-                        />
-                        <div className="mt-5 flex flex-wrap gap-3">
-                          <Button
-                            disabled={!canSendTranscript}
-                            onClick={handleSubmitTurn}
-                            type="button"
-                          >
-                            {submittingTurn ? "Sending..." : "Send Turn"}
-                          </Button>
-                          <Button
-                            onClick={() => setTranscript("")}
-                            type="button"
-                            variant="secondary"
-                          >
-                            Clear Draft
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {inputMode === "upload" ? (
-                      <div className="mt-5 rounded-2xl border border-[#dce4ef] bg-white p-5">
-                        <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                          Upload Audio
-                        </p>
-                        <p className="mt-2 text-sm leading-6 text-[#60708a]">
-                          Upload an audio file. The backend will transcribe it before the AI teacher responds.
-                        </p>
-                        <input
-                          accept="audio/*"
-                          className="mt-4 block w-full text-sm text-[#42536b]"
-                          onChange={handleAudioFileChange}
-                          ref={fileInputRef}
-                          type="file"
-                        />
-                        <p className="mt-3 text-sm leading-6 text-[#60708a]">
-                          {pendingAudio?.source === "upload"
-                            ? `Selected file: ${pendingAudio.filename}`
-                            : "Choose an audio file to send your next practice turn."}
-                        </p>
-                        <div className="mt-5 flex flex-wrap gap-3">
-                          <Button
-                            disabled={!canSendUploadedAudio}
-                            onClick={handleSubmitTurn}
-                            type="button"
-                          >
-                            {submittingTurn ? "Sending..." : "Send Audio"}
-                          </Button>
-                          <Button
-                            onClick={clearUploadDraft}
-                            type="button"
-                            variant="secondary"
-                          >
-                            Clear Selected File
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {inputMode === "record" ? (
-                      <div className="mt-5 rounded-2xl border border-[#dce4ef] bg-white p-5">
-                        <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#60708a]">
-                          Record Audio
-                        </p>
-                        <p className="mt-2 text-sm leading-6 text-[#60708a]">
-                          Record your voice using your microphone. If microphone is unavailable, use Type Transcript or Upload Audio instead.
-                        </p>
-                        {recordingError ? (
-                          <div className="mt-4 rounded-2xl border border-[#f5c2c7] bg-[#fff1f2] px-4 py-3 text-sm text-[#b42318]">
-                            {recordingError}
-                          </div>
-                        ) : null}
-                        <div className="mt-4 flex flex-wrap gap-3">
-                          <Button
-                            disabled={recorderState === "recording"}
-                            onClick={startRecording}
-                            type="button"
-                            variant="secondary"
-                          >
-                            Start Recording
-                          </Button>
-                          <Button
-                            disabled={recorderState !== "recording"}
-                            onClick={stopRecording}
-                            type="button"
-                            variant="secondary"
-                          >
-                            Stop Recording
-                          </Button>
-                        </div>
-                        <p className="mt-3 text-sm leading-6 text-[#60708a]">
-                          {getRecorderStatusLabel(recorderState)}
-                        </p>
-                        {pendingAudio?.source === "recording" ? (
-                          <>
-                            <p className="mt-2 text-sm font-semibold text-[#14213d]">
-                              Recorded file ready: {pendingAudio.filename}
-                            </p>
-                            <audio
-                              className="mt-4 w-full"
-                              controls
-                              preload="none"
-                              ref={recordingPreviewRef}
-                            />
-                          </>
-                        ) : null}
-                        <div className="mt-5 flex flex-wrap gap-3">
-                          <Button
-                            disabled={!canSendRecording}
-                            onClick={handleSubmitTurn}
-                            type="button"
-                          >
-                            {submittingTurn ? "Sending..." : "Send Recording"}
-                          </Button>
-                          <Button
-                            onClick={clearRecordingDraft}
-                            type="button"
-                            variant="secondary"
-                          >
-                            Clear Recording
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : (
+                {selectedSession.status !== "active" ? (
                   <div className="note-box mt-6">
                     This session is read-only because it is already {selectedSession.status}.
                     Start a new session to continue practicing.
                   </div>
-                )}
+                ) : null}
+
+                <div className="mt-6 overflow-hidden rounded-[2rem] border border-[#dce4ef] bg-[linear-gradient(180deg,#ffffff_0%,#f6f9ff_100%)] shadow-[0_18px_45px_rgba(20,33,61,0.08)]">
+                  <div className="border-b border-[#e2eaf5] px-5 py-5 md:px-6">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#335cff]">
+                          Practice Chat
+                        </p>
+                        <h3 className="mt-2 text-2xl font-black text-[#14213d]">
+                          ChatGPT-style learner view
+                        </h3>
+                        <p className="mt-2 max-w-2xl text-sm leading-6 text-[#60708a]">
+                          Teacher replies appear on the left. Your speech or typed turns
+                          appear on the right.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <span className="rounded-full bg-[#eef3ff] px-3 py-1 text-sm font-bold text-[#335cff]">
+                          {selectedSession.turns.length} saved turns
+                        </span>
+                        <span
+                          className={`inline-flex rounded-full border px-3 py-1 text-sm font-bold ${getRealtimeLearnerPhaseTone(
+                            realtimeLearnerPhase,
+                          )}`}
+                        >
+                          {getRealtimeLearnerPhaseLabel(realtimeLearnerPhase)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="max-h-[68vh] overflow-y-auto bg-[radial-gradient(circle_at_top,#f8fbff_0%,#ffffff_55%)] px-4 py-5 md:px-6">
+                    <div className="grid gap-4 pb-8">
+                      {conversationMessages.length ? (
+                        conversationMessages.map((message) => {
+                          const isTeacher = message.speaker === "teacher";
+                          const canPlaySavedTeacherAudio =
+                            isTeacher && !message.isLive && !!message.audioUrl && !!message.turnId;
+                          const canPlayLiveTeacherAudio =
+                            isTeacher && !!message.isLive && !!message.audioUrl && !!message.responseId;
+
+                          return (
+                            <article
+                              className={`flex ${isTeacher ? "justify-start" : "justify-end"}`}
+                              key={message.key}
+                            >
+                              <div
+                                className={`w-full max-w-3xl rounded-[1.7rem] border p-5 shadow-[0_14px_32px_rgba(20,33,61,0.06)] ${
+                                  isTeacher
+                                    ? "border-[#dce4ef] bg-white"
+                                    : "border-[#bfd7ff] bg-[#eef4ff]"
+                                }`}
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div>
+                                    <p
+                                      className={`text-sm font-bold uppercase tracking-[0.14em] ${
+                                        isTeacher ? "text-[#20b486]" : "text-[#335cff]"
+                                      }`}
+                                    >
+                                      {isTeacher ? "Teacher" : "You"}
+                                    </p>
+                                    {message.meta ? (
+                                      <p className="mt-1 text-xs font-semibold uppercase tracking-[0.12em] text-[#60708a]">
+                                        {message.meta}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {message.isLive ? (
+                                      <span className="rounded-full bg-[#eef3ff] px-3 py-1 text-xs font-bold uppercase tracking-[0.12em] text-[#335cff]">
+                                        Live
+                                      </span>
+                                    ) : null}
+                                    {message.timestamp ? (
+                                      <span className="text-xs font-semibold text-[#60708a]">
+                                        {message.timestamp}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </div>
+
+                                <p className="mt-3 leading-7 text-[#14213d]">{message.text}</p>
+
+                                {canPlaySavedTeacherAudio ? (
+                                  <div className="mt-4 flex flex-wrap gap-3">
+                                    <Button
+                                      className="px-3 py-2 text-xs"
+                                      disabled={playingTurnId === message.turnId}
+                                      onClick={() => playAiAudio(message.turnId!, message.audioUrl)}
+                                      type="button"
+                                      variant="secondary"
+                                    >
+                                      {playingTurnId === message.turnId
+                                        ? "Playing..."
+                                        : "Play Teacher Audio"}
+                                    </Button>
+                                  </div>
+                                ) : null}
+
+                                {canPlayLiveTeacherAudio ? (
+                                  <div className="mt-4 flex flex-wrap gap-3">
+                                    <Button
+                                      className="px-3 py-2 text-xs"
+                                      onClick={() =>
+                                        void playRealtimeAiResponse(
+                                          message.responseId!,
+                                          message.audioUrl,
+                                          "Unable to play the realtime teacher audio.",
+                                        )
+                                      }
+                                      type="button"
+                                      variant="secondary"
+                                    >
+                                      {realtimePlayingResponseId === message.responseId
+                                        ? "Playing..."
+                                        : "Play Teacher Audio"}
+                                    </Button>
+                                  </div>
+                                ) : null}
+
+                                {message.audioUrl ? (
+                                  <audio
+                                    className="mt-4 w-full"
+                                    controls
+                                    preload="none"
+                                    src={message.audioUrl}
+                                  />
+                                ) : null}
+                              </div>
+                            </article>
+                          );
+                        })
+                      ) : (
+                        <div className="rounded-[1.6rem] border border-dashed border-[#c7d6ea] bg-white/85 p-8 text-center">
+                          <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#335cff]">
+                            Conversation
+                          </p>
+                          <h3 className="mt-3 text-2xl font-black text-[#14213d]">
+                            No messages yet.
+                          </h3>
+                          <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-[#60708a]">
+                            Start realtime practice or open standard turn-based practice to
+                            send your first turn.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {selectedSession.status === "active" ? (
+                  <>
+                    <div className="sticky bottom-4 z-20 mt-4">
+                      <div className="rounded-[1.8rem] border border-[#dce4ef] bg-white/95 p-4 shadow-[0_20px_50px_rgba(20,33,61,0.16)] backdrop-blur">
+                        <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div>
+                            <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                              Realtime Practice
+                            </p>
+                            <p className="mt-1 text-sm font-semibold text-[#14213d]">
+                              {realtimeLearnerPhase === "recording"
+                                ? "Listening..."
+                                : realtimeLearnerPhase === "responding"
+                                  ? "Teacher is responding..."
+                                  : realtimeLearnerPhase === "error"
+                                    ? "Realtime speech had a problem. You can continue with standard practice."
+                                    : realtimeLearnerPhase === "ready"
+                                      ? "Start speaking when you are ready."
+                                      : realtimeLearnerPhase === "connecting"
+                                        ? "Connecting realtime practice..."
+                                        : "Start realtime practice or type instead."}
+                            </p>
+                            <p className="mt-1 text-sm leading-6 text-[#60708a]">
+                              {realtimeLearnerPhaseCopy}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap gap-3">
+                            {realtimeLearnerPhase === "disconnected" ? (
+                              <>
+                                <Button
+                                  disabled={!realtimeCanConnect}
+                                  onClick={() => void handleConnectRealtime()}
+                                  type="button"
+                                >
+                                  Start Realtime Practice
+                                </Button>
+                                <Button
+                                  onClick={() => openStandardPractice("transcript")}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  Type Instead
+                                </Button>
+                              </>
+                            ) : null}
+
+                            {realtimeLearnerPhase === "connecting" ? (
+                              <>
+                                <Button disabled type="button">
+                                  Connecting...
+                                </Button>
+                                <Button
+                                  disabled={!realtimeCanDisconnect}
+                                  onClick={handleStopRealtimeTest}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  End Realtime Practice
+                                </Button>
+                              </>
+                            ) : null}
+
+                            {realtimeLearnerPhase === "ready" ? (
+                              <>
+                                <Button
+                                  disabled={!realtimeCanStartSpeaking}
+                                  onClick={() => void handleStartRealtimeCapture()}
+                                  type="button"
+                                >
+                                  Start Speaking
+                                </Button>
+                                <Button
+                                  disabled={!realtimeCanDisconnect}
+                                  onClick={handleStopRealtimeTest}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  End Realtime Practice
+                                </Button>
+                              </>
+                            ) : null}
+
+                            {realtimeLearnerPhase === "recording" ? (
+                              <Button
+                                disabled={!realtimeCanEndTurn}
+                                onClick={handleEndRealtimeTurn}
+                                type="button"
+                              >
+                                Stop Speaking
+                              </Button>
+                            ) : null}
+
+                            {realtimeLearnerPhase === "responding" ? (
+                              <>
+                                <Button
+                                  disabled={!realtimeCanInterrupt}
+                                  onClick={() => void handleInterruptAndSpeak()}
+                                  type="button"
+                                >
+                                  Interrupt and Speak
+                                </Button>
+                                <Button
+                                  disabled={!realtimeCanDisconnect}
+                                  onClick={handleStopRealtimeTest}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  End Realtime Practice
+                                </Button>
+                              </>
+                            ) : null}
+
+                            {realtimeLearnerPhase === "error" ? (
+                              <>
+                                <Button
+                                  disabled={!realtimeCanConnect}
+                                  onClick={() => void handleConnectRealtime()}
+                                  type="button"
+                                >
+                                  Retry Realtime
+                                </Button>
+                                <Button
+                                  onClick={() => openStandardPractice("transcript")}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  Type Instead
+                                </Button>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div
+                      className="mt-6 rounded-[1.8rem] border border-[#dce4ef] bg-[linear-gradient(135deg,#ffffff_0%,#f7faff_100%)] p-5"
+                      ref={standardPracticeRef}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#335cff]">
+                            Standard Turn-Based Practice
+                          </p>
+                          <h3 className="mt-2 text-xl font-black text-[#14213d]">
+                            Use one turn at a time
+                          </h3>
+                          <p className="mt-2 max-w-2xl text-sm leading-6 text-[#60708a]">
+                            Use this if realtime is unavailable or you prefer one turn at a
+                            time.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                          <span className="rounded-full bg-[#eef3ff] px-3 py-1 text-sm font-bold text-[#335cff]">
+                            V5A fallback
+                          </span>
+                          <Button
+                            onClick={() => setIsStandardPracticeOpen((current) => !current)}
+                            type="button"
+                            variant="secondary"
+                          >
+                            {isStandardPracticeOpen ? "Hide Standard Practice" : "Open Standard Practice"}
+                          </Button>
+                        </div>
+                      </div>
+
+                      {isStandardPracticeOpen ? (
+                        <div className="mt-5 border-t border-[#e2eaf5] pt-5">
+                          <div className="grid gap-3 md:grid-cols-3">
+                            {inputModeOptions.map((option) => (
+                              <button
+                                className={`rounded-2xl border p-4 text-left transition ${
+                                  inputMode === option.value
+                                    ? "border-[#335cff] bg-[#eef3ff]"
+                                    : "border-[#dce4ef] bg-white hover:border-[#9cb2ff]"
+                                }`}
+                                key={option.value}
+                                onClick={() => handleInputModeChange(option.value)}
+                                type="button"
+                              >
+                                <p className="font-bold text-[#14213d]">{option.label}</p>
+                                <p className="mt-2 text-sm leading-6 text-[#60708a]">
+                                  {option.description}
+                                </p>
+                              </button>
+                            ))}
+                          </div>
+
+                          {inputMode === "transcript" ? (
+                            <div className="mt-5 rounded-2xl border border-[#dce4ef] bg-white p-5">
+                              <label className="field-label" htmlFor="voice-conversation-transcript">
+                                Type Transcript
+                              </label>
+                              <p className="mt-2 text-sm leading-6 text-[#60708a]">
+                                Type your answer or paste what you said. This does not require a
+                                microphone.
+                              </p>
+                              <textarea
+                                className="text-area mt-4"
+                                id="voice-conversation-transcript"
+                                onChange={(event) => setTranscript(event.target.value)}
+                                placeholder="Type what you want to say to the teacher."
+                                value={transcript}
+                              />
+                              <div className="mt-5 flex flex-wrap gap-3">
+                                <Button
+                                  disabled={!canSendTranscript}
+                                  onClick={handleSubmitTurn}
+                                  type="button"
+                                >
+                                  {submittingTurn ? "Sending..." : "Send Turn"}
+                                </Button>
+                                <Button
+                                  onClick={() => setTranscript("")}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  Clear Draft
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {inputMode === "upload" ? (
+                            <div className="mt-5 rounded-2xl border border-[#dce4ef] bg-white p-5">
+                              <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                                Upload Audio
+                              </p>
+                              <p className="mt-2 text-sm leading-6 text-[#60708a]">
+                                Upload an audio file. The backend will transcribe it before the AI
+                                teacher responds.
+                              </p>
+                              <input
+                                accept="audio/*"
+                                className="mt-4 block w-full text-sm text-[#42536b]"
+                                onChange={handleAudioFileChange}
+                                ref={fileInputRef}
+                                type="file"
+                              />
+                              <p className="mt-3 text-sm leading-6 text-[#60708a]">
+                                {pendingAudio?.source === "upload"
+                                  ? `Selected file: ${pendingAudio.filename}`
+                                  : "Choose an audio file to send your next practice turn."}
+                              </p>
+                              <div className="mt-5 flex flex-wrap gap-3">
+                                <Button
+                                  disabled={!canSendUploadedAudio}
+                                  onClick={handleSubmitTurn}
+                                  type="button"
+                                >
+                                  {submittingTurn ? "Sending..." : "Send Audio"}
+                                </Button>
+                                <Button
+                                  onClick={clearUploadDraft}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  Clear Selected File
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {inputMode === "record" ? (
+                            <div className="mt-5 rounded-2xl border border-[#dce4ef] bg-white p-5">
+                              <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                                Record Audio
+                              </p>
+                              <p className="mt-2 text-sm leading-6 text-[#60708a]">
+                                Record your voice using your microphone. If microphone is unavailable,
+                                use Type Transcript or Upload Audio instead.
+                              </p>
+                              {recordingError ? (
+                                <div className="mt-4 rounded-2xl border border-[#f5c2c7] bg-[#fff1f2] px-4 py-3 text-sm text-[#b42318]">
+                                  {recordingError}
+                                </div>
+                              ) : null}
+                              <div className="mt-4 flex flex-wrap gap-3">
+                                <Button
+                                  disabled={recorderState === "recording"}
+                                  onClick={startRecording}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  Start Recording
+                                </Button>
+                                <Button
+                                  disabled={recorderState !== "recording"}
+                                  onClick={stopRecording}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  Stop Recording
+                                </Button>
+                              </div>
+                              <p className="mt-3 text-sm leading-6 text-[#60708a]">
+                                {getRecorderStatusLabel(recorderState)}
+                              </p>
+                              {pendingAudio?.source === "recording" ? (
+                                <>
+                                  <p className="mt-2 text-sm font-semibold text-[#14213d]">
+                                    Recorded file ready: {pendingAudio.filename}
+                                  </p>
+                                  <audio
+                                    className="mt-4 w-full"
+                                    controls
+                                    preload="none"
+                                    ref={recordingPreviewRef}
+                                  />
+                                </>
+                              ) : null}
+                              <div className="mt-5 flex flex-wrap gap-3">
+                                <Button
+                                  disabled={!canSendRecording}
+                                  onClick={handleSubmitTurn}
+                                  type="button"
+                                >
+                                  {submittingTurn ? "Sending..." : "Send Recording"}
+                                </Button>
+                                <Button
+                                  onClick={clearRecordingDraft}
+                                  type="button"
+                                  variant="secondary"
+                                >
+                                  Clear Recording
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <details className="mt-6 rounded-[1.8rem] border border-[#dce4ef] bg-[#f8fafc] p-5">
+                      <summary className="cursor-pointer list-none">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div>
+                            <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                              Developer Diagnostics
+                            </p>
+                            <h3 className="mt-2 text-xl font-black text-[#14213d]">
+                              V5B realtime debugging
+                            </h3>
+                            <p className="mt-2 max-w-2xl text-sm leading-6 text-[#60708a]">
+                              Open this only when you need socket, chunk, STT, AI, or TTS state.
+                            </p>
+                          </div>
+                          <span className="rounded-full border border-[#dce4ef] bg-white px-3 py-1 text-sm font-bold text-[#60708a]">
+                            Collapsed by default
+                          </span>
+                        </div>
+                      </summary>
+
+                      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+                        <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            Connection
+                          </p>
+                          <span
+                            className={`mt-3 inline-flex rounded-full border px-3 py-1 text-sm font-bold ${getRealtimeStatusTone(
+                              realtimeConnectionStatus,
+                            )}`}
+                          >
+                            {getRealtimeConnectionLabel(realtimeConnectionStatus)}
+                          </span>
+                        </div>
+                        <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            Recorder
+                          </p>
+                          <span
+                            className={`mt-3 inline-flex rounded-full border px-3 py-1 text-sm font-bold ${getRealtimeStatusTone(
+                              realtimeRecordingStatus,
+                            )}`}
+                          >
+                            {getRealtimeRecordingLabel(realtimeRecordingStatus)}
+                          </span>
+                        </div>
+                        <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            Chunks
+                          </p>
+                          <p className="mt-3 text-2xl font-black text-[#14213d]">
+                            {realtimeChunkCount}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            Acked chunks
+                          </p>
+                          <p className="mt-3 text-2xl font-black text-[#14213d]">
+                            {realtimeAckCount}
+                          </p>
+                          <p className="mt-1 text-sm text-[#60708a]">
+                            {realtimeLastAckSequence
+                              ? `Last sequence #${realtimeLastAckSequence}`
+                              : "No ack yet"}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            STT status
+                          </p>
+                          <p className="mt-3 text-sm font-bold text-[#14213d]">
+                            {realtimeSttState}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            AI status
+                          </p>
+                          <p className="mt-3 text-sm font-bold text-[#14213d]">
+                            {realtimeAiState}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/70 bg-white/90 p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            TTS status
+                          </p>
+                          <p className="mt-3 text-sm font-bold text-[#14213d]">
+                            {realtimeTtsState}
+                          </p>
+                          <p className="mt-1 text-sm text-[#60708a]">
+                            Audio chunks: {realtimeTtsChunkCount}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                        <div className="rounded-2xl border border-[#dce4ef] bg-white p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            Socket details
+                          </p>
+                          <p className="mt-2 text-sm leading-6 text-[#14213d]">
+                            Transport: {realtimeTransport || "Awaiting socket"}
+                          </p>
+                          <p className="mt-1 text-sm leading-6 text-[#14213d]">
+                            Protocol: {realtimeProtocolVersion || "No protocol"}
+                          </p>
+                          <p className="mt-1 text-sm leading-6 text-[#14213d]">
+                            Session status: {realtimeSessionStatus || "unknown"}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-[#dce4ef] bg-white p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            Internal errors and notices
+                          </p>
+                          <p className="mt-2 text-sm leading-6 text-[#14213d]">
+                            Error: {realtimeError || "None"}
+                          </p>
+                          <p className="mt-1 text-sm leading-6 text-[#14213d]">
+                            Notice: {realtimeNotice || "None"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 rounded-2xl border border-[#dce4ef] bg-white p-4">
+                        <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                          Latest realtime event
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-[#14213d]">
+                          {realtimeEventMessage}
+                        </p>
+                      </div>
+
+                      <div className="mt-4 grid gap-4 xl:grid-cols-3">
+                        <div className="rounded-2xl border border-[#dce4ef] bg-white p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            Partial transcript
+                          </p>
+                          <p className="mt-2 text-sm leading-6 text-[#14213d]">
+                            {realtimePartialTranscript || "No partial transcript yet."}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-[#dce4ef] bg-white p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            Final transcripts
+                          </p>
+                          {realtimeFinalTranscripts.length ? (
+                            <div className="mt-2 grid gap-2">
+                              {realtimeFinalTranscripts.map((item, index) => (
+                                <p
+                                  className="rounded-xl bg-[#f8fafc] px-3 py-2 text-sm leading-6 text-[#14213d]"
+                                  key={`${index}-${item}`}
+                                >
+                                  {item}
+                                </p>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-sm leading-6 text-[#14213d]">
+                              No final transcript yet.
+                            </p>
+                          )}
+                        </div>
+                        <div className="rounded-2xl border border-[#dce4ef] bg-white p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                            AI teacher stream
+                          </p>
+                          <p className="mt-2 text-sm leading-6 text-[#14213d]">
+                            {realtimeAiStreamingText || "No AI response stream yet."}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 rounded-2xl border border-[#dce4ef] bg-white p-4">
+                        <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#60708a]">
+                          AI responses
+                        </p>
+                        {realtimeAiResponses.length ? (
+                          <div className="mt-2 grid gap-2">
+                            {realtimeAiResponses.map((response) => (
+                              <div
+                                className="rounded-xl bg-[#f8fafc] px-3 py-3"
+                                key={response.responseId}
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#60708a]">
+                                    {response.responseSource}
+                                  </p>
+                                  {response.wasInterrupted ? (
+                                    <span className="rounded-full border border-[#f5c2c7] bg-[#fff1f2] px-3 py-1 text-xs font-bold uppercase tracking-[0.12em] text-[#b42318]">
+                                      Interrupted
+                                    </span>
+                                  ) : response.audioUrl ? (
+                                    <Button
+                                      className="px-3 py-2 text-xs"
+                                      onClick={() =>
+                                        void playRealtimeAiResponse(
+                                          response.responseId,
+                                          response.audioUrl,
+                                          "Unable to play the realtime teacher audio.",
+                                        )
+                                      }
+                                      type="button"
+                                      variant="secondary"
+                                    >
+                                      {realtimePlayingResponseId === response.responseId
+                                        ? "Playing..."
+                                        : "Play Teacher Audio"}
+                                    </Button>
+                                  ) : null}
+                                </div>
+                                <p className="mt-2 text-sm leading-6 text-[#14213d]">
+                                  {response.responseText}
+                                </p>
+                                {response.audioUrl && !response.wasInterrupted ? (
+                                  <audio
+                                    className="mt-3 w-full"
+                                    controls
+                                    preload="none"
+                                    src={response.audioUrl}
+                                  />
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-sm leading-6 text-[#14213d]">
+                            No AI response yet.
+                          </p>
+                        )}
+                      </div>
+                    </details>
+                  </>
+                ) : null}
               </>
             ) : (
               <div className="mt-6 rounded-[1.8rem] border border-dashed border-[#c7d6ea] bg-[linear-gradient(135deg,#fbfdff_0%,#f2f7ff_100%)] p-8 text-center">

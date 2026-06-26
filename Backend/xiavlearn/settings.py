@@ -216,6 +216,11 @@ VOICE_CONVERSATION_REALTIME_DUPLICATE_TRANSCRIPT_WINDOW_SECONDS = config(
     cast=int,
 )
 
+USE_LLM_AGENTS = config('USE_LLM_AGENTS', default=False, cast=bool)
+LLM_PROVIDER = config('LLM_PROVIDER', default='openai').strip()
+LLM_API_KEY = config('LLM_API_KEY', default='').strip()
+LLM_MODEL = config('LLM_MODEL', default='gpt-5.4-mini').strip()
+
 DEEPGRAM_API_KEY = config('DEEPGRAM_API_KEY', default='')
 DEEPGRAM_TTS_MODEL = config('DEEPGRAM_TTS_MODEL', default='aura-2-thalia-en')
 DEEPGRAM_STT_MODEL = config('DEEPGRAM_STT_MODEL', default='nova-2')

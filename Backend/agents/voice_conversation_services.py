@@ -16,34 +16,34 @@ PRACTICE_ONLY_LABEL = 'Practice feedback only:'
 VOICE_CONVERSATION_TURN_CREATE_MAX_RETRIES = 3
 VOICE_CONVERSATION_SHORT_RESPONSE_THRESHOLD = 5
 VOICE_CONVERSATION_DETAILED_RESPONSE_THRESHOLD = 12
+SUPPORTED_CEFR_LEVELS = {'A1', 'A2', 'B1', 'B2', 'C1', 'C2'}
 TOPIC_FOLLOW_UPS = (
+    ('technical support', 'What kind of customer problem do you usually handle?'),
+    ('customer', 'What kind of customer problem do you usually handle?'),
+    ('interview', 'What interview question do you want to answer clearly?'),
+    ('travel', 'Where would you like to use English when traveling?'),
+    ('study', 'What subject do you study in English?'),
     ('yesterday', 'What happened after that?'),
     ('today', 'What is the next step for you today?'),
-    ('work', 'Can you describe one specific example from work?'),
-    ('job', 'What part of your job would you like to explain more?'),
+    ('work', 'What part of your job do you want to explain in English?'),
+    ('job', 'Why is speaking important in your job?'),
     ('school', 'What happened in that situation at school?'),
-    ('english', 'What part of learning English do you want to improve next?'),
+    ('english', 'Which English situation do you want to practice first?'),
     ('practice', 'What would you like to practice next?'),
     ('family', 'Can you tell me one more detail about your family?'),
     ('friend', 'What can you say about that friend?'),
 )
-SKILL_BASED_TIPS = {
-    VoiceConversationSession.TARGET_SKILL_SPEAKING: (
-        'Try adding one reason or one example in your next answer.'
-    ),
-    VoiceConversationSession.TARGET_SKILL_LISTENING: (
-        'Focus on one key detail first, then add a short supporting detail.'
-    ),
-    VoiceConversationSession.TARGET_SKILL_PRONUNCIATION: (
-        'Keep your next sentence short and clear so it will be easier to say aloud later.'
-    ),
-    VoiceConversationSession.TARGET_SKILL_GENERAL: (
-        'Keep your ideas organized in one or two clear sentences.'
-    ),
+CEFR_ENCOURAGEMENT = {
+    'A1': 'Good try. I understood your idea.',
+    'A2': 'Good answer. I understood your idea.',
+    'B1': 'Good answer. Your idea is clear.',
+    'B2': 'Good response. You gave a clear idea.',
+    'C1': 'Strong response. Your meaning is clear.',
+    'C2': 'Strong response. Your meaning is precise.',
 }
 SKILL_BASED_FOLLOW_UPS = {
     VoiceConversationSession.TARGET_SKILL_SPEAKING: (
-        'Can you say one more sentence about that?'
+        'When do you need to use spoken English?'
     ),
     VoiceConversationSession.TARGET_SKILL_LISTENING: (
         'What is the main detail you want to highlight?'
@@ -55,6 +55,13 @@ SKILL_BASED_FOLLOW_UPS = {
         'What would you like to add next?'
     ),
 }
+UNCLEAR_RESPONSES = {'um', 'uh', 'hmm', 'mmm', 'er', 'ah'}
+ROBOTIC_LABEL_PATTERNS = (
+    r'\bPractice feedback only:\s*',
+    r'\bCorrection:\s*',
+    r'\bLearning point:\s*',
+    r'\bTeacher follow-up:\s*',
+)
 
 
 def _normalize_user_transcript(user_transcript):
@@ -70,23 +77,111 @@ def _count_words(text):
     return len(re.findall(r"[A-Za-z']+", text))
 
 
-def _build_response_opening(word_count):
-    if word_count < VOICE_CONVERSATION_SHORT_RESPONSE_THRESHOLD:
-        return 'Thanks for answering. Please try to use a longer sentence next time.'
-    if word_count < VOICE_CONVERSATION_DETAILED_RESPONSE_THRESHOLD:
-        return 'Good start. Your answer is understandable and connected.'
-    return 'Nice work. Your answer includes clear detail and supports the conversation.'
+def _normalized_cefr_level(session):
+    normalized = (getattr(session, 'cefr_level', '') or '').strip().upper()
+    if normalized in SUPPORTED_CEFR_LEVELS:
+        return normalized
+    return 'A2'
 
 
-def _build_skill_tip(target_skill):
-    return SKILL_BASED_TIPS.get(
-        target_skill,
-        SKILL_BASED_TIPS[VoiceConversationSession.TARGET_SKILL_GENERAL],
+def _first_sentence(text):
+    sentence = re.split(r'[.!?]', text, maxsplit=1)[0].strip(' ,')
+    return sentence or text
+
+
+def _simple_sentence_from_transcript(normalized_transcript):
+    sentence = _first_sentence(normalized_transcript)
+    if not sentence:
+        return 'I need a little more time to answer.'
+    sentence = sentence[0].upper() + sentence[1:]
+    if not sentence.endswith('.'):
+        sentence = f'{sentence}.'
+    return sentence
+
+
+def _normalize_question_text(question):
+    return re.sub(r'[^a-z0-9]+', ' ', (question or '').lower()).strip()
+
+
+def _last_question(text):
+    if not text:
+        return ''
+    matches = re.findall(r'([^?]*\?)', text)
+    if not matches:
+        return ''
+    return re.sub(r'\s+', ' ', matches[-1]).strip()
+
+
+def _recent_conversation_turns(session, limit=5):
+    turns_manager = getattr(session, 'turns', None)
+    if turns_manager is None:
+        return []
+    try:
+        turns = list(turns_manager.order_by('-turn_number')[:limit])
+    except Exception:
+        return []
+    turns.reverse()
+    return [
+        {
+            'learner': turn.user_transcript,
+            'teacher': turn.ai_response_text,
+        }
+        for turn in turns
+    ]
+
+
+def _previous_teacher_question(recent_turns):
+    if not recent_turns:
+        return ''
+    for turn in reversed(recent_turns):
+        question = _last_question(turn.get('teacher', ''))
+        if question:
+            return question
+    return ''
+
+
+def _learner_answered_reason_question(previous_question, normalized_transcript):
+    question = _normalize_question_text(previous_question)
+    answer = normalized_transcript.lower()
+    if 'reason' not in question:
+        return False
+    return bool(
+        'reason' in answer
+        or 'because' in answer
+        or 'so i can' in answer
+        or 'to improve' in answer
+        or 'want to improve' in answer
     )
 
 
-def _build_follow_up_question(session, normalized_transcript):
+def _speaking_context_follow_up(normalized_transcript):
     lowered = normalized_transcript.lower()
+    if 'work' in lowered or 'job' in lowered:
+        return 'When do you usually use English at work?'
+    if 'customer' in lowered or 'support' in lowered:
+        return 'Do you want to improve speaking for meetings, interviews, or customer support?'
+    return 'When do you need to use spoken English?'
+
+
+def _build_follow_up_question(
+    session,
+    normalized_transcript,
+    cefr_level,
+    recent_turns=None,
+):
+    lowered = normalized_transcript.lower()
+    previous_question = _previous_teacher_question(recent_turns)
+    if _learner_answered_reason_question(previous_question, normalized_transcript):
+        return _speaking_context_follow_up(normalized_transcript)
+    if 'speaking' in lowered or 'speak' in lowered:
+        return _speaking_context_follow_up(normalized_transcript)
+    if cefr_level == 'A1':
+        if 'technical support' in lowered or 'customer' in lowered:
+            return 'What customer problem do you fix?'
+        if 'work' in lowered or 'job' in lowered:
+            return 'What is your job?'
+        if 'english' in lowered:
+            return 'What English word do you want to practice?'
     for keyword, question in TOPIC_FOLLOW_UPS:
         if keyword in lowered:
             return question
@@ -96,45 +191,236 @@ def _build_follow_up_question(session, normalized_transcript):
     )
 
 
-def build_voice_conversation_fallback_response(session, user_transcript):
-    normalized_transcript = _normalize_user_transcript(user_transcript)
-    word_count = _count_words(normalized_transcript)
-    opening = _build_response_opening(word_count)
-    tip = _build_skill_tip(session.target_skill)
-    follow_up = _build_follow_up_question(session, normalized_transcript)
+def _is_unclear_response(normalized_transcript):
+    words = re.findall(r"[A-Za-z']+", normalized_transcript.lower())
+    if not words:
+        return True
+    return len(words) <= 2 and all(word in UNCLEAR_RESPONSES for word in words)
+
+
+def _build_rephrase_and_learning_point(normalized_transcript, cefr_level):
+    lowered = normalized_transcript.lower()
+    if _is_unclear_response(normalized_transcript):
+        return None, 'Try one short sentence with a clear idea.'
+    if re.search(r'\bthe\s+reason\s+is\s+to\s+improve\b', lowered):
+        return (
+            'I want to improve my speaking skills.',
+            "English speakers often use a direct sentence instead of saying 'The reason is.'",
+        )
+    if 'technical support' in lowered:
+        if re.search(r'\bi\s+work\s+technical\s+support\b', lowered):
+            return (
+                'I work in technical support, and I help customers.',
+                "Use 'work in' for a field or department.",
+            )
+        if re.search(r'\bi\s+work\s+in\s+technical\s+support\b', lowered):
+            return (
+                'I work in technical support and help customers solve problems.',
+                'Add a specific action after your job field.',
+            )
+        return (
+            'I help customers solve technical support problems.',
+            'Use specific verbs like help, solve, or explain.',
+        )
+    if re.search(r'\bi\s+want\s+improve\b', lowered):
+        if 'because my job' in lowered:
+            return (
+                'I want to improve my speaking because of my job.',
+                "Use 'want to' before a verb.",
+            )
+        return (
+            re.sub(
+                r'\bI want improve\b',
+                'I want to improve',
+                _simple_sentence_from_transcript(normalized_transcript),
+                flags=re.IGNORECASE,
+            ),
+            "Use 'want to' before a verb.",
+        )
+    if 'because my job' in lowered:
+        return (
+            'This is important because of my job.',
+            "Use 'because of' before a noun.",
+        )
+    if re.search(r'\bhelp customer\b', lowered):
+        return (
+            'I help customers.',
+            "Use the plural 'customers' when speaking generally.",
+        )
+    if re.search(r'\bi\s+am\s+work\b', lowered):
+        return (
+            'I work every day.',
+            "Use 'I work' for your job or regular activity.",
+        )
+    if re.search(r'\bi\s+no\s+understand\b', lowered):
+        return (
+            'I do not understand.',
+            "Use 'do not' before the main verb in a negative sentence.",
+        )
+    if cefr_level == 'A1':
+        return (
+            _simple_sentence_from_transcript(normalized_transcript),
+            'Use one short, complete sentence.',
+        )
+    if cefr_level == 'A2':
+        return (
+            _simple_sentence_from_transcript(normalized_transcript),
+            'Keep the sentence direct and easy to say aloud.',
+        )
+    if cefr_level in {'B1', 'B2'}:
+        return (
+            _simple_sentence_from_transcript(normalized_transcript),
+            'Connect your idea with one clear reason or example.',
+        )
     return (
-        f'{PRACTICE_ONLY_LABEL} {opening} {tip} '
-        f'Teacher follow-up: {follow_up}'
+        _simple_sentence_from_transcript(normalized_transcript),
+        'Choose precise wording so your idea sounds natural and specific.',
     )
 
 
-def _normalize_ai_response_text(response_text):
+def _build_fallback_encouragement(cefr_level, word_count):
+    if word_count < VOICE_CONVERSATION_SHORT_RESPONSE_THRESHOLD:
+        return 'Good try. I understood part of your idea.'
+    if word_count >= VOICE_CONVERSATION_DETAILED_RESPONSE_THRESHOLD and cefr_level in {'B2', 'C1', 'C2'}:
+        return CEFR_ENCOURAGEMENT[cefr_level]
+    return CEFR_ENCOURAGEMENT.get(cefr_level, CEFR_ENCOURAGEMENT['A2'])
+
+
+def _trim_to_one_question(response_text):
+    first_question_index = response_text.find('?')
+    if first_question_index == -1:
+        return response_text
+    second_question_index = response_text.find('?', first_question_index + 1)
+    if second_question_index == -1:
+        return response_text
+    return response_text[:first_question_index + 1].strip()
+
+
+def _strip_robotic_labels(response_text):
+    normalized = response_text
+    for pattern in ROBOTIC_LABEL_PATTERNS:
+        normalized = re.sub(pattern, '', normalized, flags=re.IGNORECASE)
+    return re.sub(r'\s+', ' ', normalized).strip()
+
+
+def _avoid_repeated_question(question, session, normalized_transcript, recent_turns=None):
+    previous_question = _previous_teacher_question(recent_turns)
+    if not previous_question:
+        return question
+    previous_normalized = _normalize_question_text(previous_question)
+    current_normalized = _normalize_question_text(question)
+    if current_normalized and current_normalized != previous_normalized:
+        return question
+    if 'speaking' in normalized_transcript.lower() or 'reason' in normalized_transcript.lower():
+        return _speaking_context_follow_up(normalized_transcript)
+    if 'technical support' in normalized_transcript.lower() or 'customer' in normalized_transcript.lower():
+        return 'What kind of customer problem do you usually handle?'
+    return 'What detail can you add next?'
+
+
+def _contextual_follow_up(session=None, user_transcript=None, recent_turns=None):
+    if session is not None and user_transcript:
+        question = _build_follow_up_question(
+            session,
+            user_transcript,
+            _normalized_cefr_level(session),
+            recent_turns=recent_turns,
+        )
+        return _avoid_repeated_question(
+            question,
+            session,
+            user_transcript,
+            recent_turns=recent_turns,
+        )
+    return 'What would you like to add next?'
+
+
+def build_voice_conversation_fallback_response(
+    session,
+    user_transcript,
+    recent_turns=None,
+):
+    normalized_transcript = _normalize_user_transcript(user_transcript)
+    recent_turns = recent_turns if recent_turns is not None else _recent_conversation_turns(session)
+    cefr_level = _normalized_cefr_level(session)
+    word_count = _count_words(normalized_transcript)
+    encouragement = _build_fallback_encouragement(cefr_level, word_count)
+    rephrase, learning_point = _build_rephrase_and_learning_point(
+        normalized_transcript,
+        cefr_level,
+    )
+    follow_up = _contextual_follow_up(
+        session,
+        normalized_transcript,
+        recent_turns=recent_turns,
+    )
+    if _is_unclear_response(normalized_transcript):
+        response_text = (
+            f'{encouragement} Please try one short sentence. '
+            f'{learning_point} Can you try again with one short sentence?'
+        )
+        return _trim_to_one_question(response_text)
+    correction_label = 'A better sentence is'
+    if cefr_level in {'B2', 'C1', 'C2'}:
+        correction_label = 'A more natural version is'
+    response_text = (
+        f'{encouragement} '
+        f'{correction_label}: {rephrase} '
+        f'{learning_point} '
+        f'{follow_up}'
+    )
+    return _trim_to_one_question(response_text)
+
+
+def _normalize_ai_response_text(
+    response_text,
+    session=None,
+    user_transcript=None,
+    recent_turns=None,
+    strip_labels=False,
+):
     if not isinstance(response_text, str):
         return None
     normalized = re.sub(r'\s+', ' ', response_text).strip()
     if not normalized:
         return None
-    if not normalized.startswith(PRACTICE_ONLY_LABEL):
-        normalized = f'{PRACTICE_ONLY_LABEL} {normalized}'
-    if 'Teacher follow-up:' not in normalized:
-        normalized = f'{normalized} Teacher follow-up: What would you like to add next?'
-    return normalized
+    if strip_labels:
+        normalized = _strip_robotic_labels(normalized)
+    if '?' not in normalized:
+        normalized = (
+            f'{normalized} '
+            f'{_contextual_follow_up(session, user_transcript, recent_turns=recent_turns)}'
+        )
+    return _trim_to_one_question(normalized)
 
 
 def generate_voice_conversation_response(session, user_transcript):
     normalized_transcript = _normalize_user_transcript(user_transcript)
+    recent_turns = _recent_conversation_turns(session)
     llm_payload = call_llm_json(
-        *voice_conversation_response_prompt(session, normalized_transcript)
+        *voice_conversation_response_prompt(
+            session,
+            normalized_transcript,
+            recent_turns=recent_turns,
+        )
     )
     if isinstance(llm_payload, dict):
         normalized_response = _normalize_ai_response_text(
-            llm_payload.get('response_text')
+            llm_payload.get('response_text'),
+            session=session,
+            user_transcript=normalized_transcript,
+            recent_turns=recent_turns,
+            strip_labels=True,
         )
         if normalized_response:
             return normalized_response, 'llm'
 
     return (
-        build_voice_conversation_fallback_response(session, normalized_transcript),
+        build_voice_conversation_fallback_response(
+            session,
+            normalized_transcript,
+            recent_turns=recent_turns,
+        ),
         'deterministic_fallback',
     )
 

@@ -1,17 +1,234 @@
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings
+from django.test import SimpleTestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from agents.llm_client import call_llm_json, get_llm_runtime_diagnostic
 from agents.models import VoiceConversationSession, VoiceConversationTurn
+from agents.prompts import voice_conversation_response_prompt
+from agents.voice_conversation_services import (
+    build_voice_conversation_fallback_response,
+    generate_voice_conversation_response,
+)
 from agents.voice_services import VoiceDiagnosticError
 from learning.models import Skill, SkillMastery
 
 
+class FakeLlmResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return None
+
+    def read(self):
+        return self.payload
+
+
+class VoiceConversationTeacherPromptTests(SimpleTestCase):
+    def _session(self, cefr_level='A2', target_skill='speaking'):
+        return SimpleNamespace(
+            target_skill=target_skill,
+            cefr_level=cefr_level,
+            title='Voice practice',
+        )
+
+    def assert_one_follow_up_question(self, response_text):
+        self.assertEqual(response_text.count('?'), 1)
+
+    def test_prompt_requires_cefr_aware_practice_only_feedback(self):
+        system_prompt, user_prompt = voice_conversation_response_prompt(
+            self._session(cefr_level='B2'),
+            'I work in technical support.',
+            recent_turns=[
+                {
+                    'learner': 'I want to improve my speaking.',
+                    'teacher': 'What is one reason for your answer?',
+                }
+            ],
+        )
+
+        self.assertIn('practice-only', system_prompt)
+        self.assertIn('Do not use labels', system_prompt)
+        self.assertIn('exactly one follow-up question', system_prompt)
+        self.assertIn('one correction or one more natural rephrase', system_prompt)
+        self.assertIn('Do not ask for the same information again.', system_prompt)
+        self.assertIn('A1 uses very short sentences', system_prompt)
+        self.assertIn('B2 improves fluency', system_prompt)
+        self.assertIn('Do not mention scores', system_prompt)
+        self.assertIn('SkillMastery', system_prompt)
+        self.assertIn('Recent conversation history:', user_prompt)
+        self.assertIn('What is one reason for your answer?', user_prompt)
+        self.assertIn('CEFR level: B2', user_prompt)
+        self.assertIn('avoid repeating the previous teacher question', user_prompt)
+
+    def test_prompt_makes_correction_conditional(self):
+        system_prompt, _ = voice_conversation_response_prompt(
+            self._session(cefr_level='B2'),
+            'AI helps me improve my speaking skills the most.',
+        )
+
+        self.assertIn('only when the learner sentence has a clear grammar', system_prompt)
+        self.assertIn('already clear and natural', system_prompt)
+        self.assertIn('Never present the same sentence as a correction.', system_prompt)
+        self.assertIn('Do not overuse the phrase "A more natural way to say it is."', system_prompt)
+        self.assertIn('You can also say', system_prompt)
+        self.assertIn('A small correction is', system_prompt)
+
+    def test_a1_fallback_uses_short_simple_feedback(self):
+        response_text = build_voice_conversation_fallback_response(
+            self._session(cefr_level='A1'),
+            'I am work today.',
+        )
+
+        self.assertIn('Good try', response_text)
+        self.assertIn('I work every day.', response_text)
+        self.assertIn("Use 'I work'", response_text)
+        self.assertIn('What is your job?', response_text)
+        self.assertNotIn('Teacher follow-up:', response_text)
+        self.assert_one_follow_up_question(response_text)
+
+    def test_a2_fallback_corrects_want_improve_because_my_job(self):
+        response_text = build_voice_conversation_fallback_response(
+            self._session(cefr_level='A2'),
+            'I want improve my speaking because my job.',
+        )
+
+        self.assertIn('I want to improve my speaking because of my job.', response_text)
+        self.assertIn("Use 'want to' before a verb.", response_text)
+        self.assertIn('When do you usually use English at work?', response_text)
+        self.assert_one_follow_up_question(response_text)
+
+    def test_b1_fallback_corrects_technical_support_answer(self):
+        response_text = build_voice_conversation_fallback_response(
+            self._session(cefr_level='B1'),
+            'I work technical support and I help customer.',
+        )
+
+        self.assertIn(
+            'I work in technical support, and I help customers.',
+            response_text,
+        )
+        self.assertIn("Use 'work in' for a field or department.", response_text)
+        self.assertIn('What kind of customer problem do you usually handle?', response_text)
+        self.assert_one_follow_up_question(response_text)
+
+    def test_b2_fallback_uses_more_natural_rephrase(self):
+        response_text = build_voice_conversation_fallback_response(
+            self._session(cefr_level='B2'),
+            'I work in technical support.',
+        )
+
+        self.assertIn('A more natural version is', response_text)
+        self.assertIn(
+            'I work in technical support and help customers solve problems.',
+            response_text,
+        )
+        self.assertIn('Add a specific action after your job field.', response_text)
+        self.assertIn('What kind of customer problem do you usually handle?', response_text)
+        self.assert_one_follow_up_question(response_text)
+
+    def test_unclear_fallback_still_gives_one_question(self):
+        response_text = build_voice_conversation_fallback_response(
+            self._session(cefr_level='A2'),
+            'um',
+        )
+
+        self.assertIn('Please try one short sentence.', response_text)
+        self.assertIn('Try one short sentence with a clear idea.', response_text)
+        self.assertIn('Can you try again with one short sentence?', response_text)
+        self.assertNotIn('A better sentence is:', response_text)
+        self.assert_one_follow_up_question(response_text)
+
+    def test_fallback_does_not_repeat_answered_reason_question(self):
+        response_text = build_voice_conversation_fallback_response(
+            self._session(cefr_level='B1'),
+            'The reason is to improve my speaking skills.',
+            recent_turns=[
+                {
+                    'learner': 'I want to practice English.',
+                    'teacher': 'What is one reason for your answer?',
+                }
+            ],
+        )
+
+        self.assertIn('I want to improve my speaking skills.', response_text)
+        self.assertIn("instead of saying 'The reason is.'", response_text)
+        self.assertNotIn('What is one reason for your answer?', response_text)
+        self.assertNotIn('What is one reason', response_text)
+        self.assertIn('When do you need to use spoken English?', response_text)
+        self.assert_one_follow_up_question(response_text)
+
+    @patch('agents.voice_conversation_services.call_llm_json')
+    def test_llm_response_with_follow_up_label_still_gets_question(self, mock_call_llm_json):
+        mock_call_llm_json.return_value = {
+            'response_text': (
+                'Good answer. A better sentence is: I work in technical support. '
+                "Learning point: Use 'work in' for a department. "
+                'Teacher follow-up: Tell me more about that.'
+            )
+        }
+
+        response_text, response_source = generate_voice_conversation_response(
+            self._session(cefr_level='B1'),
+            'I work technical support.',
+        )
+
+        self.assertEqual(response_source, 'llm')
+        self.assertNotIn('Practice feedback only:', response_text)
+        self.assertNotIn('Teacher follow-up:', response_text)
+        self.assertIn('What kind of customer problem do you usually handle?', response_text)
+        self.assert_one_follow_up_question(response_text)
+
+    @override_settings(
+        USE_LLM_AGENTS=True,
+        LLM_PROVIDER='openai',
+        LLM_API_KEY='',
+        LLM_MODEL='',
+    )
+    def test_llm_missing_config_logs_safe_skip(self):
+        with self.assertLogs('agents.llm_client', level='WARNING') as captured:
+            payload = call_llm_json('system', 'user')
+
+        self.assertIsNone(payload)
+        log_output = '\n'.join(captured.output)
+        self.assertIn('VOICE_LLM_SKIPPED reason=missing_config', log_output)
+        self.assertIn('LLM_API_KEY', log_output)
+        self.assertIn('LLM_MODEL', log_output)
+        self.assertNotIn('sk-', log_output)
+
+    @override_settings(
+        USE_LLM_AGENTS=True,
+        LLM_PROVIDER='openai',
+        LLM_API_KEY='test-key',
+        LLM_MODEL='test-model',
+    )
+    @patch('agents.llm_client.request.urlopen')
+    def test_llm_config_present_attempts_request(self, mock_urlopen):
+        mock_urlopen.return_value = FakeLlmResponse(
+            b'{"choices":[{"message":{"content":"{\\"response_text\\": \\"Good answer. What happened next?\\"}"}}]}'
+        )
+
+        diagnostic = get_llm_runtime_diagnostic()
+        payload = call_llm_json('system', 'user')
+
+        self.assertTrue(diagnostic['enabled'])
+        self.assertTrue(diagnostic['provider_configured'])
+        self.assertTrue(diagnostic['model_configured'])
+        self.assertTrue(diagnostic['api_key_present'])
+        self.assertEqual(payload['response_text'], 'Good answer. What happened next?')
+        self.assertTrue(mock_urlopen.called)
+
+
+@override_settings(USE_LLM_AGENTS=False)
 class VoiceConversationAPITests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(
@@ -187,10 +404,10 @@ class VoiceConversationAPITests(APITestCase):
         self.assertEqual(
             data['ai_response_text'],
             (
-                'Practice feedback only: Good start. Your answer is '
-                'understandable and connected. Try adding one reason or one '
-                'example in your next answer. Teacher follow-up: What part '
-                'of learning English do you want to improve next?'
+                'Good answer. I understood your idea. '
+                'A better sentence is: Hello teacher, I want to practice English. '
+                'Keep the sentence direct and easy to say aloud. '
+                'Which English situation do you want to practice first?'
             ),
         )
         self.assertTrue(data['metadata']['practice_only'])
@@ -234,8 +451,10 @@ class VoiceConversationAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         data = self.assert_success_response(response)
         self.assertEqual(data['transcript_source'], 'manual')
-        self.assertIn('Practice feedback only:', data['ai_response_text'])
-        self.assertIn('Teacher follow-up:', data['ai_response_text'])
+        self.assertTrue(data['metadata']['practice_only'])
+        self.assertNotIn('Practice feedback only:', data['ai_response_text'])
+        self.assertNotIn('Teacher follow-up:', data['ai_response_text'])
+        self.assertEqual(data['ai_response_text'].count('?'), 1)
 
     @patch('agents.voice_conversation_services.synthesize_tts')
     @patch('agents.voice_conversation_services.call_llm_json')
@@ -269,7 +488,10 @@ class VoiceConversationAPITests(APITestCase):
         self.assertTrue(data['ai_audio'])
         self.assertEqual(
             data['ai_response_text'],
-            mock_call_llm_json.return_value['response_text'],
+            (
+                'That was a clear answer with a useful example. Try to explain '
+                'one reason in more detail. What happened next?'
+            ),
         )
 
         turn = VoiceConversationTurn.objects.get(session_id=session_data['id'], turn_number=1)
@@ -292,7 +514,9 @@ class VoiceConversationAPITests(APITestCase):
         self.assertFalse(data['metadata']['tts_generated'])
         self.assertEqual(data['metadata']['tts_error'], 'TTS request failed: timeout')
         self.assertIsNone(data['ai_audio'])
-        self.assertIn('Practice feedback only:', data['ai_response_text'])
+        self.assertTrue(data['metadata']['practice_only'])
+        self.assertNotIn('Practice feedback only:', data['ai_response_text'])
+        self.assertEqual(data['ai_response_text'].count('?'), 1)
 
     @patch('agents.voice_conversation_services.transcribe_audio')
     def test_audio_upload_creates_turn_with_deepgram_transcript(self, mock_transcribe_audio):
@@ -325,7 +549,8 @@ class VoiceConversationAPITests(APITestCase):
         self.assertEqual(data['metadata']['input_mode'], 'audio_upload')
         self.assertEqual(data['metadata']['response_mode'], 'deterministic_fallback')
         self.assertFalse(data['metadata']['tts_generated'])
-        self.assertIn('Practice feedback only:', data['ai_response_text'])
+        self.assertNotIn('Practice feedback only:', data['ai_response_text'])
+        self.assertEqual(data['ai_response_text'].count('?'), 1)
 
         turn = VoiceConversationTurn.objects.get(session_id=session_data['id'], turn_number=1)
         self.assertTrue(turn.user_audio.name.endswith('practice.webm'))

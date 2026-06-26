@@ -3,6 +3,8 @@ import logging
 import os
 from urllib import error, request
 
+from django.conf import settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,59 @@ def _env_flag(name, default=False):
     if value is None:
         return default
     return value.strip().lower() in TRUTHY_VALUES
+
+
+def _setting_or_env(name, default=''):
+    value = getattr(settings, name, None)
+    if value is None:
+        value = os.getenv(name, default)
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _setting_or_env_flag(name, default=False):
+    value = getattr(settings, name, None)
+    if value is None:
+        return _env_flag(name, default=default)
+    if isinstance(value, str):
+        return value.strip().lower() in TRUTHY_VALUES
+    return bool(value)
+
+
+def get_llm_runtime_diagnostic():
+    provider = _setting_or_env('LLM_PROVIDER', 'openai')
+    model = _setting_or_env('LLM_MODEL', DEFAULT_OPENAI_MODEL)
+    api_key = _setting_or_env('LLM_API_KEY', '')
+    return {
+        'enabled': _setting_or_env_flag('USE_LLM_AGENTS', default=False),
+        'provider_configured': bool(provider),
+        'model_configured': bool(model),
+        'api_key_present': bool(api_key),
+        'provider': provider or '',
+        'model': model or '',
+    }
+
+
+def _missing_llm_config(diagnostic):
+    missing = []
+    if not diagnostic['provider_configured']:
+        missing.append('LLM_PROVIDER')
+    if not diagnostic['model_configured']:
+        missing.append('LLM_MODEL')
+    if not diagnostic['api_key_present']:
+        missing.append('LLM_API_KEY')
+    return missing
+
+
+def _log_llm_skipped(reason, missing=None):
+    missing_text = ','.join(missing or [])
+    log = logger.info if reason == 'disabled' else logger.warning
+    log(
+        'VOICE_LLM_SKIPPED reason=%s missing=%s',
+        reason,
+        missing_text or 'none',
+    )
 
 
 def _extract_json_content(payload):
@@ -45,14 +100,21 @@ def _strip_code_fences(raw_content):
 
 
 def call_llm_json(system_prompt, user_prompt):
-    if not _env_flag('USE_LLM_AGENTS', default=False):
+    diagnostic = get_llm_runtime_diagnostic()
+    if not diagnostic['enabled']:
+        _log_llm_skipped('disabled')
         return None
 
-    provider = os.getenv('LLM_PROVIDER', 'openai').strip().lower()
-    api_key = os.getenv('LLM_API_KEY', '').strip()
-    model = os.getenv('LLM_MODEL', DEFAULT_OPENAI_MODEL).strip()
+    provider = diagnostic['provider'].strip().lower()
+    api_key = _setting_or_env('LLM_API_KEY', '')
+    model = diagnostic['model'].strip()
 
-    if provider != 'openai' or not api_key or not model:
+    missing = _missing_llm_config(diagnostic)
+    if missing:
+        _log_llm_skipped('missing_config', missing=missing)
+        return None
+    if provider != 'openai':
+        _log_llm_skipped('unsupported_provider')
         return None
 
     payload = {
